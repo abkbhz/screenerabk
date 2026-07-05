@@ -462,18 +462,29 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
     });
   }
 
-  // Current values
-  const currClose = closes[len - 1];
-  const currEma20 = ema20[len - 1];
-  const currEma50 = ema50[len - 1];
-  const currEma200 = ema200[len - 1];
-  const currRsi = rsi[len - 1];
-  const currVolume = volumes[len - 1];
-  const currVolSma20 = volumeSma20[len - 1];
-  const currHigh8w = high8w[len - 1];
+  // Yahoo appends an INCOMPLETE current-week candle whose volume is only a
+  // fraction of a full week — evaluating the weekly screener on it makes the
+  // Volume/RSI/breakout filters almost never trigger. Real weekly screeners
+  // (e.g. Chartink) use the last COMPLETED weekly bar, so we drop a trailing
+  // partial bar (detected when the last two bars are < 6 days apart).
+  let evalIdx = len - 1;
+  if (len >= 3 && !forceSynthetic) {
+    const gapDays = (timestamps[len - 1] - timestamps[len - 2]) / 86400;
+    if (gapDays < 6) evalIdx = len - 2;
+  }
+
+  // Current values (evaluated on the last completed weekly candle)
+  const currClose = closes[evalIdx];
+  const currEma20 = ema20[evalIdx];
+  const currEma50 = ema50[evalIdx];
+  const currEma200 = ema200[evalIdx];
+  const currRsi = rsi[evalIdx];
+  const currVolume = volumes[evalIdx];
+  const currVolSma20 = volumeSma20[evalIdx];
+  const currHigh8w = high8w[evalIdx];
 
   // Calculate percentage change based on previous week
-  const prevClose = closes[len - 2] || currClose;
+  const prevClose = closes[evalIdx - 1] || currClose;
   const change = parseFloat((((currClose - prevClose) / prevClose) * 100).toFixed(2));
 
   // Check custom filter rules requested by user
