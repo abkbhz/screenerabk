@@ -32,10 +32,10 @@ export default function MetricCard({ label, value, subValue, status, ruleDescrip
         )}
       </div>
 
-      <div className="flex items-baseline gap-2">
-        <span className="text-xl font-bold font-mono text-slate-100">{value}</span>
+      <div className="flex items-baseline gap-2 min-w-0">
+        <span className="text-xl font-bold font-mono text-slate-100 tabular-nums truncate">{value}</span>
         {subValue && (
-          <span className="text-xs font-mono text-slate-500">/ {subValue}</span>
+          <span className="text-xs font-mono text-slate-500 shrink-0">/ {subValue}</span>
         )}
       </div>
 

@@ -13,6 +13,10 @@ import {
   ArrowUpRight, AlertTriangle, ShieldCheck 
 } from "lucide-react";
 
+// Indian-locale price formatter: 1411.4000244 -> "1,411.40"
+const fmtPrice = (n: number) =>
+  Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 export default function App() {
   const [stocks, setStocks] = useState<StockDetails[]>([]);
   const [selectedStock, setSelectedStock] = useState<StockDetails | null>(null);
@@ -329,7 +333,7 @@ export default function App() {
               {stocks.slice(0, 8).map(s => (
                 <span key={s.ticker} className="inline-flex items-center gap-1.5">
                   <span className="font-bold text-slate-200">{s.ticker}</span>
-                  <span className="text-slate-300">₹{s.price}</span>
+                  <span className="text-slate-300">₹{fmtPrice(s.price)}</span>
                   <span className={`inline-flex items-center font-bold ${s.change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                     {s.change >= 0 ? '+' : ''}{s.change}%
                     {s.change >= 0 ? <ArrowUpRight size={12} /> : <TrendingDown size={12} />}
@@ -583,7 +587,7 @@ export default function App() {
                         </div>
                         <div className="text-right font-mono">
                           <span className="text-xs font-bold text-slate-200 block">
-                            ₹{stock.price}
+                            ₹{fmtPrice(stock.price)}
                           </span>
                           <span className={`text-[10px] font-bold ${stock.change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                             {stock.change >= 0 ? '+' : ''}{stock.change}%
@@ -667,7 +671,7 @@ export default function App() {
                 <div className="flex items-baseline gap-4 self-stretch sm:self-auto justify-between border-t sm:border-t-0 border-slate-800/50 pt-3 sm:pt-0">
                   <div className="text-right">
                     <span className="text-slate-500 text-[10px] uppercase block font-mono">Current Price</span>
-                    <span className="text-xl font-bold font-mono text-slate-100">₹{selectedStock.price}</span>
+                    <span className="text-xl font-bold font-mono text-slate-100">₹{fmtPrice(selectedStock.price)}</span>
                   </div>
                   <div className="text-right">
                     <span className="text-slate-500 text-[10px] uppercase block font-mono">Weekly Change</span>
@@ -698,7 +702,7 @@ export default function App() {
                       
                       <MetricCard
                         label="Close Metric"
-                        value={`₹${selectedStock.indicators.close}`}
+                        value={`₹${fmtPrice(selectedStock.indicators.close)}`}
                         subValue="₹100"
                         status={selectedStock.filtersMatched.closeAbove100 ? "pass" : "fail"}
                         ruleDescription="Specifies stock is safe with robust liquid institutional backing."
@@ -706,24 +710,24 @@ export default function App() {
 
                       <MetricCard
                         label="20-Week EMA"
-                        value={`₹${selectedStock.indicators.close}`}
-                        subValue={`₹${selectedStock.indicators.ema20}`}
+                        value={`₹${fmtPrice(selectedStock.indicators.close)}`}
+                        subValue={`₹${fmtPrice(selectedStock.indicators.ema20)}`}
                         status={selectedStock.filtersMatched.closeAbove20wEma ? "pass" : "fail"}
                         ruleDescription="Specifies asset is maintaining active short-term bullish momentum."
                       />
 
                       <MetricCard
                         label="50-Week EMA"
-                        value={`₹${selectedStock.indicators.close}`}
-                        subValue={`₹${selectedStock.indicators.ema50}`}
+                        value={`₹${fmtPrice(selectedStock.indicators.close)}`}
+                        subValue={`₹${fmtPrice(selectedStock.indicators.ema50)}`}
                         status={selectedStock.filtersMatched.closeAbove50wEma ? "pass" : "fail"}
                         ruleDescription="Specifies active medium-term structural trend support."
                       />
 
                       <MetricCard
                         label="200-Week EMA"
-                        value={`₹${selectedStock.indicators.close}`}
-                        subValue={`₹${selectedStock.indicators.ema200}`}
+                        value={`₹${fmtPrice(selectedStock.indicators.close)}`}
+                        subValue={`₹${fmtPrice(selectedStock.indicators.ema200)}`}
                         status={selectedStock.filtersMatched.closeAbove200wEma ? "pass" : "fail"}
                         ruleDescription="Specifies major safety guardrail. Crucial macro-trend support."
                       />
@@ -746,8 +750,8 @@ export default function App() {
 
                       <MetricCard
                         label="8-Week Breakout"
-                        value={`₹${selectedStock.indicators.close}`}
-                        subValue={`₹${selectedStock.indicators.high8w}`}
+                        value={`₹${fmtPrice(selectedStock.indicators.close)}`}
+                        subValue={`₹${fmtPrice(selectedStock.indicators.high8w)}`}
                         status={selectedStock.filtersMatched.closeAbove8wHigh ? "pass" : "fail"}
                         ruleDescription="Specifies breakout from horizontal consolidations."
                       />

@@ -526,11 +526,11 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
   return {
     ticker: upperTicker,
     name: meta.longName,
-    price: currClose,
+    price: parseFloat(currClose.toFixed(2)), // live Yahoo values are raw floats — round for display
     change,
     history: displayHistory,
     indicators: {
-      close: currClose,
+      close: parseFloat(currClose.toFixed(2)),
       ema20: parseFloat(currEma20.toFixed(2)),
       ema50: parseFloat(currEma50.toFixed(2)),
       ema200: parseFloat(currEma200.toFixed(2)),
