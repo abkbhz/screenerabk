@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo, FormEvent } from "react";
-import { StockDetails, FilterConfig, MarketAlert } from "./types";
+import { StockDetails, FilterConfig } from "./types";
 import MetricCard from "./components/MetricCard";
 import StockChart from "./components/StockChart";
 import AiAnalysisPanel from "./components/AiAnalysisPanel";
-import AlertNotificationList, { playAlertChime } from "./components/AlertNotificationList";
 import InvestmentCalculator from "./components/InvestmentCalculator";
 import BacktestPanel from "./components/BacktestPanel";
 import { apiUrl } from "./api";
@@ -16,6 +15,11 @@ import {
 // Indian-locale price formatter: 1411.4000244 -> "1,411.40"
 const fmtPrice = (n: number) =>
   Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Cap how many stock cards render at once. With ~2000 stocks, rendering them
+// all mounts tens of thousands of DOM nodes and hangs the browser. The full
+// universe is still searched/filtered — only the visible list is capped.
+const LIST_LIMIT = 80;
 
 export default function App() {
   const [stocks, setStocks] = useState<StockDetails[]>([]);
@@ -38,29 +42,6 @@ export default function App() {
     closeAbove8wHigh: false,
   });
 
-  // Radar notifications list
-  const [alerts, setAlerts] = useState<MarketAlert[]>([
-    {
-      id: "init-1",
-      ticker: "RELIANCE",
-      timestamp: new Date(Date.now() - 1000 * 60 * 30).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      type: "entry",
-      message: "Cleared previous 8-week high with high breakout volume. Entry parameters matched perfectly.",
-      read: false
-    },
-    {
-      id: "init-2",
-      ticker: "TCS",
-      timestamp: new Date(Date.now() - 1000 * 60 * 120).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      type: "exit",
-      message: "Relative Strength Index exceeded 75. Pullback risk high. Take profit signals flashing.",
-      read: false
-    }
-  ]);
-
-  // Track triggered alerts in session to avoid repetitive spam on poll
-  const [triggeredAlertKeys, setTriggeredAlertKeys] = useState<Set<string>>(new Set());
-
   // Initial fetch
   const fetchStocks = async (isPoll = false) => {
     if (!isPoll) setLoading(true);
@@ -78,11 +59,6 @@ export default function App() {
       // (that would strip its chart history + projections and blank the panels).
       if (data.stocks && data.stocks.length > 0) {
         setSelectedStock(prev => prev ? prev : data.stocks[0]);
-
-        // Scan for new live alert signals
-        if (isPoll) {
-          scanForNewSignals(data.stocks);
-        }
       }
       setError(null);
     } catch (err: any) {
@@ -96,10 +72,10 @@ export default function App() {
   useEffect(() => {
     fetchStocks();
 
-    // Poll stocks every 25 seconds for actual live-updating terminal experience
+    // Poll stocks every 60 seconds to refresh prices without hammering the CPU.
     const pollInterval = setInterval(() => {
       fetchStocks(true);
-    }, 25000);
+    }, 60000);
 
     return () => clearInterval(pollInterval);
   }, []);
@@ -112,64 +88,6 @@ export default function App() {
       loadDetail(selectedStock.ticker);
     }
   }, [selectedStock?.ticker, selectedStock?.projections]);
-
-  // Monitor stocks and automatically compile live alerts on transitions
-  const scanForNewSignals = (currentStocks: StockDetails[]) => {
-    currentStocks.forEach(stock => {
-      const isPerfectEntry = stock.entryRecommendation === "CRITICAL PERFECT ENTRY";
-      const isOverbought = stock.indicators.rsi > 72;
-      
-      const alertKeyPerfect = `${stock.ticker}-perfect-${stock.indicators.close}`;
-      const alertKeyOverbought = `${stock.ticker}-overbought-${stock.indicators.close}`;
-
-      if (isPerfectEntry && !triggeredAlertKeys.has(alertKeyPerfect)) {
-        // Trigger breakout alert
-        const newAlert: MarketAlert = {
-          id: `alert-${Date.now()}-${stock.ticker}`,
-          ticker: stock.ticker,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          type: "entry",
-          message: `${stock.name} met all high-conviction screening metrics! RSI is in the golden 55-63 zone and volume crossed 1.8x average. Perfect Entry Triggered!`,
-          read: false
-        };
-
-        setAlerts(prev => [newAlert, ...prev]);
-        setTriggeredAlertKeys(prev => {
-          const next = new Set(prev);
-          next.add(alertKeyPerfect);
-          return next;
-        });
-
-        // Play synthetic alert sound
-        playAlertChime();
-
-        // Standard browser desktop notification
-        if ("Notification" in window && Notification.permission === "granted") {
-          new Notification(`CRITICAL PERFECT ENTRY: ${stock.ticker}`, {
-            body: `${stock.ticker} is at ₹${stock.indicators.close} matching all technical momentum criteria perfectly!`
-          });
-        }
-      } else if (isOverbought && !triggeredAlertKeys.has(alertKeyOverbought)) {
-        const newAlert: MarketAlert = {
-          id: `alert-${Date.now()}-${stock.ticker}`,
-          ticker: stock.ticker,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          type: "exit",
-          message: `${stock.name} RSI crossed overbought thresholds at ${stock.indicators.rsi}. Profit target recommended.`,
-          read: false
-        };
-
-        setAlerts(prev => [newAlert, ...prev]);
-        setTriggeredAlertKeys(prev => {
-          const next = new Set(prev);
-          next.add(alertKeyOverbought);
-          return next;
-        });
-
-        playAlertChime();
-      }
-    });
-  };
 
   // Selecting a stock is instant (uses the compact list entry); the detail
   // (chart history + projections) then streams in via loadDetail.
@@ -225,9 +143,6 @@ export default function App() {
       });
       setSelectedStock(data.stock);
       setSearchTicker("");
-      
-      // Success alert chime
-      playAlertChime();
     } catch (err: any) {
       setError(err.message || "Failed to import custom equity asset.");
     } finally {
@@ -540,7 +455,7 @@ export default function App() {
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto max-h-[340px] lg:max-h-[480px] flex flex-col gap-2.5 pr-1">
-                {filteredStocks.map(stock => {
+                {filteredStocks.slice(0, LIST_LIMIT).map(stock => {
                   const isSelected = selectedStock?.ticker === stock.ticker;
                   return (
                     <div
@@ -624,6 +539,11 @@ export default function App() {
                     </div>
                   );
                 })}
+                {filteredStocks.length > LIST_LIMIT && (
+                  <p className="text-center text-[10px] font-mono text-slate-600 py-2">
+                    Showing top {LIST_LIMIT} of {filteredStocks.length}. Use the filters or search to narrow down.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -788,16 +708,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Timely Entry Exit Notifications Area */}
-          <AlertNotificationList
-            alerts={alerts}
-            onClearAlerts={() => setAlerts([])}
-            onSelectStock={(ticker) => {
-              const match = stocks.find(s => s.ticker === ticker);
-              if (match) setSelectedStock(match);
-            }}
-          />
-
         </section>
 
       </main>
@@ -807,7 +717,7 @@ export default function App() {
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-2 text-[11px] font-mono text-slate-500">
           <p>© 2026 ABK Screener. All technical indicators calculated via Welles Wilder smoothing and exponential algorithm.</p>
           <div className="flex items-center gap-4">
-            <span>POLL INTERNAL: 25s</span>
+            <span>POLL INTERVAL: 60s</span>
             <span>SYSTEM CONVERGENCE: STABLE</span>
           </div>
         </div>
