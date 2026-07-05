@@ -264,6 +264,9 @@ export default function App() {
     }
 
     return stocks.filter(stock => {
+      // Only real (live) data can be a genuine screener match; exclude
+      // not-yet-warmed synthetic placeholders so they never pollute results.
+      if (!stock.isLive) return false;
       return activeFilterKeys.every(filterKey => {
         if (filterKey === "closeAbove100") return stock.filtersMatched.closeAbove100;
         if (filterKey === "closeAbove20wEma") return stock.filtersMatched.closeAbove20wEma;
