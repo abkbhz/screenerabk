@@ -90,6 +90,50 @@ interface StockPoint {
   high8w?: number;
 }
 
+interface ProjectionHorizon {
+  label: string;
+  days: number;
+  weeks: number;
+  expectedPct: number;
+  lowPct: number;
+  highPct: number;
+}
+
+interface Projections {
+  weeklyMeanReturn: number; // fractional per week, e.g. 0.004 = 0.4%
+  weeklyStdReturn: number;
+  horizons: ProjectionHorizon[];
+}
+
+// Historical-trend based expected-return estimates (NOT a guarantee).
+// Uses the mean/σ of weekly returns; compounds the mean over each horizon and
+// widens a ±1σ band by √weeks. Callers must label this clearly as an estimate.
+function computeProjections(closes: number[]): Projections {
+  const rets: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    if (closes[i - 1] > 0) rets.push(closes[i] / closes[i - 1] - 1);
+  }
+  const n = rets.length || 1;
+  const mean = rets.reduce((a, b) => a + b, 0) / n;
+  const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / n;
+  const std = Math.sqrt(variance);
+
+  const defs: [string, number][] = [['1W', 1], ['1M', 4], ['3M', 13], ['6M', 26], ['1Y', 52]];
+  const horizons: ProjectionHorizon[] = defs.map(([label, weeks]) => {
+    const expected = Math.pow(1 + mean, weeks) - 1;
+    const band = std * Math.sqrt(weeks);
+    return {
+      label,
+      days: weeks * 7,
+      weeks,
+      expectedPct: parseFloat((expected * 100).toFixed(2)),
+      lowPct: parseFloat(((expected - band) * 100).toFixed(2)),
+      highPct: parseFloat(((expected + band) * 100).toFixed(2)),
+    };
+  });
+  return { weeklyMeanReturn: mean, weeklyStdReturn: std, horizons };
+}
+
 interface StockDetails {
   ticker: string;
   name: string;
@@ -119,6 +163,7 @@ interface StockDetails {
   recommendationScore: number; // 0 to 100
   entryRecommendation: string; // Dynamic signal like 'Perfect Entry', 'Wait for Pullback', etc.
   isLive?: boolean;
+  projections?: Projections; // historical-trend expected-return estimates
 }
 
 // Store for dynamic session tracking
@@ -506,7 +551,8 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
     recommendation,
     recommendationScore: score,
     entryRecommendation,
-    isLive: isLiveResult
+    isLive: isLiveResult,
+    projections: computeProjections(closes)
   };
 }
 
@@ -544,7 +590,8 @@ function buildTickerUniverse(): string[] {
 const TICKER_UNIVERSE = buildTickerUniverse();
 
 function toListShape(data: StockDetails): StockDetails {
-  return { ...data, history: [] }; // strip heavy history for the list payload
+  // strip heavy history + projections for the compact list payload
+  return { ...data, history: [], projections: undefined };
 }
 
 // Warm a single ticker: fetch live, fall back to synthetic, always cache something.
@@ -603,6 +650,10 @@ app.get("/api/stocks", async (req, res) => {
   }
 });
 
+// Short-lived cache for the full detail payload so re-selecting a stock is instant.
+const detailCache = new Map<string, { data: StockDetails; ts: number }>();
+const DETAIL_TTL_MS = 3 * 60 * 1000;
+
 // 1.5 Live Detailed Stock Endpoint (fetches real Yahoo Finance on-demand)
 app.get("/api/stocks/detail", async (req, res) => {
   const { ticker } = req.query;
@@ -610,9 +661,249 @@ app.get("/api/stocks/detail", async (req, res) => {
     res.status(400).json({ error: "Missing ticker query parameter" });
     return;
   }
+  const key = ticker.toUpperCase().trim();
+  const cached = detailCache.get(key);
+  if (cached && Date.now() - cached.ts < DETAIL_TTL_MS) {
+    res.json({ stock: cached.data });
+    return;
+  }
   try {
     const data = await getStockData(ticker, false); // forceSynthetic = false for genuine live yfinance
+    detailCache.set(key, { data, ts: Date.now() });
     res.json({ stock: data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Multi-resolution history + backtest
+// ---------------------------------------------------------------------------
+
+function normalizeTicker(ticker: string): string {
+  let t = ticker.toUpperCase().trim();
+  if (!t.includes('.') && t !== 'NIFTY' && t !== 'SENSEX') t = `${t}.NS`;
+  return t;
+}
+
+// Timeframe -> Yahoo (interval, range). Intraday only exists for recent windows;
+// long ranges fall back to weekly/monthly (no free source has hourly-over-10y).
+const TF_MAP: Record<string, { interval: string; range: string; label: string }> = {
+  '1D':  { interval: '5m',  range: '1d',  label: 'Intraday (5m)' },
+  '5D':  { interval: '15m', range: '5d',  label: 'Intraday (15m)' },
+  '1M':  { interval: '60m', range: '1mo', label: 'Hourly' },
+  '6M':  { interval: '1d',  range: '6mo', label: 'Daily' },
+  '1Y':  { interval: '1d',  range: '1y',  label: 'Daily' },
+  '5Y':  { interval: '1wk', range: '5y',  label: 'Weekly' },
+  '10Y': { interval: '1mo', range: '10y', label: 'Monthly' },
+};
+
+const MS_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function formatSeriesDate(ts: number, interval: string): string {
+  const d = new Date(ts * 1000);
+  const mon = MS_MONTHS[d.getMonth()];
+  const day = d.getDate();
+  // Intraday intervals include time-of-day; daily+ show the date only.
+  if (interval.endsWith('m') || interval.endsWith('h')) {
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    return `${mon} ${day} ${hh}:${mm}`;
+  }
+  return `${mon} ${day}, ${d.getFullYear().toString().slice(-2)}`;
+}
+
+// Raw OHLCV pull at an arbitrary interval/range. Returns null on any failure.
+async function fetchYahooSeries(ticker: string, interval: string, range: string) {
+  const t = normalizeTicker(ticker);
+  try {
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${t}?interval=${interval}&range=${range}`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
+    });
+    if (!res.ok) return null;
+    const json = await res.json() as any;
+    const result = json.chart?.result?.[0];
+    const quote = result?.indicators?.quote?.[0];
+    if (!result || !quote?.close?.length) return null;
+    const timestamps: number[] = result.timestamp || [];
+    const closes: number[] = [], highs: number[] = [], lows: number[] = [], volumes: number[] = [], stamps: number[] = [];
+    for (let i = 0; i < quote.close.length; i++) {
+      if (quote.close[i] != null && quote.high[i] != null && quote.low[i] != null) {
+        closes.push(quote.close[i]);
+        highs.push(quote.high[i]);
+        lows.push(quote.low[i]);
+        volumes.push(quote.volume?.[i] || 0);
+        stamps.push(timestamps[i]);
+      }
+    }
+    if (closes.length < 3) return null;
+    return { closes, highs, lows, volumes, stamps, name: result.meta?.longName || getStockLongName(t) };
+  } catch {
+    return null;
+  }
+}
+
+// Build chart points (price + indicators) from a raw series.
+function buildChartPoints(raw: { closes: number[]; highs: number[]; lows: number[]; volumes: number[]; stamps: number[] }, interval: string): StockPoint[] {
+  const { closes, highs, lows, volumes, stamps } = raw;
+  const ema20 = calculateEMA(closes, 20);
+  const ema50 = calculateEMA(closes, 50);
+  const ema200 = calculateEMA(closes, 200);
+  const rsi = calculateRSI(closes, 14);
+  const volSma = calculateSMA(volumes, 20);
+  return closes.map((c, i) => ({
+    date: formatSeriesDate(stamps[i], interval),
+    close: parseFloat(c.toFixed(2)),
+    high: parseFloat(highs[i].toFixed(2)),
+    low: parseFloat(lows[i].toFixed(2)),
+    volume: Math.round(volumes[i]),
+    ema20: parseFloat(ema20[i].toFixed(2)),
+    ema50: parseFloat(ema50[i].toFixed(2)),
+    ema200: parseFloat(ema200[i].toFixed(2)),
+    rsi: parseFloat(rsi[i].toFixed(1)),
+    volumeSma20: Math.round(volSma[i]),
+  }));
+}
+
+// 1.6 Multi-resolution history endpoint (for the zoomable chart)
+const historyCache = new Map<string, { points: StockPoint[]; isLive: boolean; ts: number }>();
+const HISTORY_TTL_MS = 5 * 60 * 1000;
+
+app.get("/api/stocks/history", async (req, res) => {
+  const ticker = typeof req.query.ticker === 'string' ? req.query.ticker : '';
+  const tf = (typeof req.query.tf === 'string' && TF_MAP[req.query.tf]) ? req.query.tf : '1Y';
+  if (!ticker) {
+    res.status(400).json({ error: "Missing ticker query parameter" });
+    return;
+  }
+  const key = `${normalizeTicker(ticker)}|${tf}`;
+  const cached = historyCache.get(key);
+  if (cached && Date.now() - cached.ts < HISTORY_TTL_MS) {
+    res.json({ points: cached.points, tf, label: TF_MAP[tf].label, isLive: cached.isLive });
+    return;
+  }
+  try {
+    const { interval, range } = TF_MAP[tf];
+    const raw = await fetchYahooSeries(ticker, interval, range);
+    let points: StockPoint[];
+    let isLive = false;
+    if (raw) {
+      points = buildChartPoints(raw, interval);
+      isLive = true;
+    } else {
+      // Fall back to the synthetic weekly series so the chart never breaks.
+      const synth = await getStockData(ticker, true);
+      points = synth.history;
+    }
+    historyCache.set(key, { points, isLive, ts: Date.now() });
+    res.json({ points, tf, label: TF_MAP[tf].label, isLive });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 1.7 Backtest endpoint — how the screener's rules would have performed over ~10y
+const backtestCache = new Map<string, { payload: any; ts: number }>();
+const BACKTEST_TTL_MS = 30 * 60 * 1000;
+
+app.get("/api/stocks/backtest", async (req, res) => {
+  const ticker = typeof req.query.ticker === 'string' ? req.query.ticker : '';
+  if (!ticker) {
+    res.status(400).json({ error: "Missing ticker query parameter" });
+    return;
+  }
+  const key = normalizeTicker(ticker);
+  const cached = backtestCache.get(key);
+  if (cached && Date.now() - cached.ts < BACKTEST_TTL_MS) {
+    res.json(cached.payload);
+    return;
+  }
+  try {
+    const raw = await fetchYahooSeries(ticker, '1wk', '10y') || (() => {
+      const s = generateSyntheticStockData(normalizeTicker(ticker));
+      return { closes: s.closes, highs: s.highs, lows: s.lows, volumes: s.volumes, stamps: s.timestamps, name: s.meta.longName };
+    })();
+
+    const { closes, highs, volumes, stamps } = raw;
+    const len = closes.length;
+    const ema50 = calculateEMA(closes, 50);
+    const rsi = calculateRSI(closes, 14);
+    const volSma = calculateSMA(volumes, 20);
+    const high8w: number[] = [];
+    for (let i = 0; i < len; i++) {
+      if (i < 8) { high8w.push(highs[i]); continue; }
+      let m = -Infinity;
+      for (let j = i - 8; j < i; j++) m = Math.max(m, highs[j]);
+      high8w.push(m);
+    }
+
+    // Simulate: normalized ₹100 start. Strategy goes long on entry rules, exits on exit rules.
+    const START = 100;
+    let strategy = START;
+    let holding = false;
+    let entryPrice = 0;
+    let entryDate = '';
+    const trades: any[] = [];
+    const equitySeries: any[] = [];
+    const priceSeries: any[] = [];
+    const buyHoldBase = closes[0] || 1;
+
+    for (let i = 0; i < len; i++) {
+      const c = closes[i];
+      const date = formatSeriesDate(stamps[i], '1wk');
+      priceSeries.push({ date, close: parseFloat(c.toFixed(2)) });
+
+      if (holding) strategy *= (c / closes[i - 1]); // mark-to-market while in position
+
+      const entrySignal = c > ema50[i] && rsi[i] >= 55 && rsi[i] <= 63 && (volumes[i] > 1.8 * volSma[i] || c > high8w[i]);
+      const exitSignal = rsi[i] > 72 || c < ema50[i];
+
+      if (!holding && entrySignal) {
+        holding = true; entryPrice = c; entryDate = date;
+      } else if (holding && exitSignal) {
+        holding = false;
+        trades.push({ entryDate, exitDate: date, entryPrice: parseFloat(entryPrice.toFixed(2)), exitPrice: parseFloat(c.toFixed(2)), returnPct: parseFloat((((c - entryPrice) / entryPrice) * 100).toFixed(2)) });
+      }
+
+      equitySeries.push({
+        date,
+        strategy: parseFloat(strategy.toFixed(2)),
+        buyHold: parseFloat(((c / buyHoldBase) * START).toFixed(2)),
+      });
+    }
+    // Close any open position at the last bar for accurate stats.
+    if (holding) {
+      const c = closes[len - 1];
+      trades.push({ entryDate, exitDate: formatSeriesDate(stamps[len - 1], '1wk'), entryPrice: parseFloat(entryPrice.toFixed(2)), exitPrice: parseFloat(c.toFixed(2)), returnPct: parseFloat((((c - entryPrice) / entryPrice) * 100).toFixed(2)), open: true });
+    }
+
+    // Stats
+    const wins = trades.filter(t => t.returnPct > 0).length;
+    const years = Math.max(1, len / 52);
+    const totalReturnPct = strategy / START - 1;
+    const buyHoldReturnPct = closes[len - 1] / buyHoldBase - 1;
+    let peak = -Infinity, maxDd = 0;
+    for (const e of equitySeries) { peak = Math.max(peak, e.strategy); maxDd = Math.max(maxDd, (peak - e.strategy) / peak); }
+
+    const payload = {
+      ticker: key,
+      name: raw.name,
+      isLive: len > 50,
+      priceSeries,
+      equitySeries,
+      trades,
+      stats: {
+        totalReturnPct: parseFloat((totalReturnPct * 100).toFixed(1)),
+        buyHoldReturnPct: parseFloat((buyHoldReturnPct * 100).toFixed(1)),
+        cagr: parseFloat(((Math.pow(strategy / START, 1 / years) - 1) * 100).toFixed(1)),
+        trades: trades.length,
+        winRatePct: trades.length ? parseFloat(((wins / trades.length) * 100).toFixed(0)) : 0,
+        maxDrawdownPct: parseFloat((maxDd * 100).toFixed(1)),
+        years: parseFloat(years.toFixed(1)),
+      },
+    };
+    backtestCache.set(key, { payload, ts: Date.now() });
+    res.json(payload);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

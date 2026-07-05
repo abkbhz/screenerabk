@@ -4,6 +4,8 @@ import MetricCard from "./components/MetricCard";
 import StockChart from "./components/StockChart";
 import AiAnalysisPanel from "./components/AiAnalysisPanel";
 import AlertNotificationList, { playAlertChime } from "./components/AlertNotificationList";
+import InvestmentCalculator from "./components/InvestmentCalculator";
+import BacktestPanel from "./components/BacktestPanel";
 import { apiUrl } from "./api";
 import { 
   TrendingUp, TrendingDown, Search, Plus, RotateCw, 
@@ -66,14 +68,12 @@ export default function App() {
       const data = await res.json();
       
       setStocks(data.stocks || []);
-      
-      // Select first stock as default if none selected or if matching existing
+
+      // Auto-select the first stock only when nothing is selected yet.
+      // Never overwrite an already-selected stock with the list-shaped entry
+      // (that would strip its chart history + projections and blank the panels).
       if (data.stocks && data.stocks.length > 0) {
-        setSelectedStock(prev => {
-          if (!prev) return data.stocks[0];
-          const updated = data.stocks.find((s: StockDetails) => s.ticker === prev.ticker);
-          return updated || data.stocks[0];
-        });
+        setSelectedStock(prev => prev ? prev : data.stocks[0]);
 
         // Scan for new live alert signals
         if (isPoll) {
@@ -100,12 +100,14 @@ export default function App() {
     return () => clearInterval(pollInterval);
   }, []);
 
-  // Fetch real-time live Yahoo Finance details in background if currently selected stock is simulated
+  // Load the full live detail (history + projections) for the selected stock.
+  // The list entries are compact (no history/projections), so whenever the
+  // selected ticker lacks projections we fetch its detail exactly once.
   useEffect(() => {
-    if (selectedStock && !selectedStock.isLive && !fetchingLiveDetail) {
-      handleSelectStock(selectedStock);
+    if (selectedStock && !selectedStock.projections && !fetchingLiveDetail) {
+      loadDetail(selectedStock.ticker);
     }
-  }, [selectedStock?.ticker, selectedStock?.isLive]);
+  }, [selectedStock?.ticker, selectedStock?.projections]);
 
   // Monitor stocks and automatically compile live alerts on transitions
   const scanForNewSignals = (currentStocks: StockDetails[]) => {
@@ -165,21 +167,24 @@ export default function App() {
     });
   };
 
-  const handleSelectStock = async (stock: StockDetails) => {
+  // Selecting a stock is instant (uses the compact list entry); the detail
+  // (chart history + projections) then streams in via loadDetail.
+  const handleSelectStock = (stock: StockDetails) => {
     setSelectedStock(stock);
+  };
+
+  const loadDetail = async (ticker: string) => {
     setFetchingLiveDetail(true);
     try {
-      const res = await fetch(apiUrl(`/api/stocks/detail?ticker=${encodeURIComponent(stock.ticker)}`));
+      const res = await fetch(apiUrl(`/api/stocks/detail?ticker=${encodeURIComponent(ticker)}`));
       if (res.ok) {
         const data = await res.json();
         if (data.stock) {
-          // Update the stock in the master list and selected stock state
-          setStocks(prev => prev.map(s => s.ticker === stock.ticker ? data.stock : s));
-          setSelectedStock(data.stock);
+          setSelectedStock(prev => (prev && prev.ticker === ticker ? data.stock : prev));
         }
       }
     } catch (err) {
-      console.warn("Failed to retrieve live Yahoo Finance chart on demand, staying with simulated metrics", err);
+      console.warn("Failed to retrieve live Yahoo Finance detail on demand", err);
     } finally {
       setFetchingLiveDetail(false);
     }
@@ -680,7 +685,7 @@ export default function App() {
                 <div className="lg:col-span-2 flex flex-col gap-5">
                   
                   {/* Stock chart */}
-                  <StockChart history={selectedStock.history} ticker={selectedStock.ticker} />
+                  <StockChart ticker={selectedStock.ticker} initialHistory={selectedStock.history} />
 
                   {/* Indicators checklist grid */}
                   <div className="bg-[#111827]/60 border border-slate-800/80 rounded-2xl p-4.5 backdrop-blur-md">
@@ -750,6 +755,9 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Investment projection calculator */}
+                  <InvestmentCalculator stock={selectedStock} />
+
                 </div>
 
                 {/* Gemini AI Analyst Board */}
@@ -758,6 +766,9 @@ export default function App() {
                 </div>
 
               </div>
+
+              {/* 10-year strategy backtest (full width) */}
+              <BacktestPanel ticker={selectedStock.ticker} />
 
             </div>
           ) : (

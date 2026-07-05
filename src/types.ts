@@ -41,6 +41,49 @@ export interface StockDetails {
   recommendationScore: number;
   entryRecommendation: string;
   isLive?: boolean;
+  projections?: Projections;
+}
+
+export interface ProjectionHorizon {
+  label: string;
+  days: number;
+  weeks: number;
+  expectedPct: number;
+  lowPct: number;
+  highPct: number;
+}
+
+export interface Projections {
+  weeklyMeanReturn: number;
+  weeklyStdReturn: number;
+  horizons: ProjectionHorizon[];
+}
+
+export interface BacktestTrade {
+  entryDate: string;
+  exitDate: string;
+  entryPrice: number;
+  exitPrice: number;
+  returnPct: number;
+  open?: boolean;
+}
+
+export interface BacktestResult {
+  ticker: string;
+  name: string;
+  isLive: boolean;
+  priceSeries: { date: string; close: number }[];
+  equitySeries: { date: string; strategy: number; buyHold: number }[];
+  trades: BacktestTrade[];
+  stats: {
+    totalReturnPct: number;
+    buyHoldReturnPct: number;
+    cagr: number;
+    trades: number;
+    winRatePct: number;
+    maxDrawdownPct: number;
+    years: number;
+  };
 }
 
 export interface FilterConfig {
