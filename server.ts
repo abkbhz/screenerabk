@@ -1,0 +1,755 @@
+import express, { Request, Response } from "express";
+import path from "path";
+import dotenv from "dotenv";
+import { GoogleGenAI, Type } from "@google/genai";
+import { createServer as createViteServer } from "vite";
+import { INDIAN_STOCKS } from "./src/indianStocksList";
+
+dotenv.config();
+
+const app = express();
+// Render (and most hosts) inject the port via env; fall back to 3000 locally.
+const PORT = Number(process.env.PORT) || 3000;
+// The frontend is hosted separately (Vercel), so allow cross-origin calls.
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "*";
+// Gemini model is configurable; gemini-3.5-flash is the current GA flash model.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+
+app.use(express.json());
+
+// CORS so the Vercel-hosted frontend can reach this backend.
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", FRONTEND_ORIGIN);
+  res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
+
+// Initialize Gemini SDK with telemetry header
+const ai = new GoogleGenAI({
+  apiKey: GEMINI_API_KEY || "dummy-key",
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
+
+// Default core list of stocks (NSE India)
+const DEFAULT_TICKERS = [
+  'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
+  'BHARTIARTL.NS', 'ITC.NS', 'SBIN.NS', 'LT.NS', 'TATAMOTORS.NS',
+  'BAJFINANCE.NS', 'HINDUNILVR.NS', 'AXISBANK.NS', 'WIPRO.NS',
+  'TATASTEEL.NS', 'SUNPHARMA.NS', 'HCLTECH.NS', 'ADANIENT.NS', 'KOTAKBANK.NS',
+  'M&M.NS', 'ADANIPORTS.NS', 'POWERGRID.NS', 'NTPC.NS', 'COALINDIA.NS',
+  'ONGC.NS', 'MARUTI.NS', 'TITAN.NS', 'ASIANPAINT.NS', 'ULTRACEMCO.NS',
+  'NESTLEIND.NS', 'JSWSTEEL.NS', 'GRASIM.NS', 'HINDALCO.NS', 'TECHM.NS',
+  'HDFCLIFE.NS', 'SBILIFE.NS', 'BPCL.NS', 'CIPLA.NS', 'APOLLOHOSP.NS',
+  'DRREDDY.NS', 'EICHERMOT.NS', 'ZOMATO.NS', 'HAL.NS', 'TRENT.NS', 'JIOFIN.NS',
+  'SUZLON.NS', 'IRFC.NS', 'RVNL.NS', 'YESBANK.NS', 'IREDA.NS', 'NHPC.NS',
+  'TATAPOWER.NS', 'BEL.NS', 'GMRINFRA.NS', 'HUDCO.NS', 'PFC.NS', 'RECLTD.NS',
+  'BANKBARODA.NS', 'CANBK.NS', 'SAIL.NS', 'GAIL.NS', 'IOC.NS', 'NYKAA.NS',
+  'PAYTM.NS', 'IDEA.NS', 'TATAELXSI.NS', 'KPITTECH.NS', 'COFORGE.NS'
+];
+
+// Helper for names
+function getStockLongName(ticker: string): string {
+  const clean = ticker.toUpperCase().replace(/\.NS$/, '').replace(/\.BO$/, '');
+  const match = INDIAN_STOCKS.find(s => s.symbol.toUpperCase() === clean);
+  if (match) {
+    return match.name;
+  }
+  return `${clean} Corporation`;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function formatCustomDate(dateObj: Date): string {
+  const month = MONTHS[dateObj.getMonth()];
+  const day = dateObj.getDate();
+  const year = dateObj.getFullYear().toString().slice(-2);
+  return `${month} ${day}, ${year}`;
+}
+
+// Indicator interfaces
+interface StockPoint {
+  date: string;
+  close: number;
+  high: number;
+  low: number;
+  volume: number;
+  ema20?: number;
+  ema50?: number;
+  ema200?: number;
+  rsi?: number;
+  volumeSma20?: number;
+  high8w?: number;
+}
+
+interface StockDetails {
+  ticker: string;
+  name: string;
+  price: number;
+  change: number;
+  history: StockPoint[];
+  indicators: {
+    close: number;
+    ema20: number;
+    ema50: number;
+    ema200: number;
+    rsi: number;
+    volume: number;
+    volumeSma20: number;
+    high8w: number;
+  };
+  filtersMatched: {
+    closeAbove100: boolean;
+    closeAbove20wEma: boolean;
+    closeAbove50wEma: boolean;
+    closeAbove200wEma: boolean;
+    rsiBetween55And63: boolean;
+    volumeAbove1_8Sma20: boolean;
+    closeAbove8wHigh: boolean;
+  };
+  recommendation: string; // 'STRONG BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG SELL'
+  recommendationScore: number; // 0 to 100
+  entryRecommendation: string; // Dynamic signal like 'Perfect Entry', 'Wait for Pullback', etc.
+  isLive?: boolean;
+}
+
+// Store for dynamic session tracking
+const sessionTickers = new Set<string>(DEFAULT_TICKERS);
+
+// Mathematical Indicator Calculations
+function calculateEMA(data: number[], period: number): number[] {
+  const ema: number[] = [];
+  if (data.length === 0) return ema;
+  const k = 2 / (period + 1);
+  let prevEma = data[0];
+  ema.push(prevEma);
+
+  for (let i = 1; i < data.length; i++) {
+    const curEma = data[i] * k + prevEma * (1 - k);
+    ema.push(curEma);
+    prevEma = curEma;
+  }
+  return ema;
+}
+
+function calculateSMA(data: number[], period: number): number[] {
+  const sma: number[] = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      let sum = 0;
+      for (let j = 0; j <= i; j++) sum += data[j];
+      sma.push(sum / (i + 1));
+    } else {
+      let sum = 0;
+      for (let j = i - period + 1; j <= i; j++) sum += data[j];
+      sma.push(sum / period);
+    }
+  }
+  return sma;
+}
+
+function calculateRSI(closes: number[], period: number = 14): number[] {
+  const rsi: number[] = [];
+  const len = closes.length;
+  if (len === 0) return rsi;
+
+  rsi.push(50); // Default first point
+
+  let avgGain = 0;
+  let avgLoss = 0;
+
+  // Compute first RSI
+  if (len > period) {
+    let firstGains = 0;
+    let firstLosses = 0;
+    for (let i = 1; i <= period; i++) {
+      const diff = closes[i] - closes[i - 1];
+      if (diff > 0) firstGains += diff;
+      else firstLosses -= diff;
+    }
+    avgGain = firstGains / period;
+    avgLoss = firstLosses / period;
+
+    for (let i = 1; i < period; i++) {
+      rsi.push(50);
+    }
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    rsi.push(100 - (100 / (1 + rs)));
+
+    // Smoothed calculations
+    for (let i = period + 1; i < len; i++) {
+      const diff = closes[i] - closes[i - 1];
+      const gain = diff > 0 ? diff : 0;
+      const loss = diff < 0 ? -diff : 0;
+
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+
+      if (avgLoss === 0) {
+        rsi.push(100);
+      } else {
+        const rs = avgGain / avgLoss;
+        rsi.push(100 - (100 / (1 + rs)));
+      }
+    }
+  } else {
+    for (let i = 1; i < len; i++) rsi.push(50);
+  }
+
+  return rsi;
+}
+
+// Generate premium mock data with genuine trend mechanics
+function generateSyntheticStockData(ticker: string) {
+  const longName = getStockLongName(ticker);
+  let basePrice = 800;
+  let volatility = 0.04;
+  let drift = 0.0015;
+
+  const clean = ticker.toUpperCase().replace(/\.NS$/, '');
+
+  // Ticker-specific styling for extreme realism in INR
+  if (clean === 'RELIANCE') { basePrice = 2950; volatility = 0.025; drift = 0.0012; }
+  // Tata Consultancy Services
+  else if (clean === 'TCS') { basePrice = 3820; volatility = 0.020; drift = 0.0015; }
+  // HDFC Bank
+  else if (clean === 'HDFCBANK') { basePrice = 1620; volatility = 0.025; drift = 0.0010; }
+  // Infosys
+  else if (clean === 'INFY') { basePrice = 1530; volatility = 0.030; drift = 0.0012; }
+  // ICICI Bank
+  else if (clean === 'ICICIBANK') { basePrice = 1120; volatility = 0.025; drift = 0.0015; }
+  // Bharti Airtel
+  else if (clean === 'BHARTIARTL') { basePrice = 1420; volatility = 0.035; drift = 0.0018; }
+  // ITC
+  else if (clean === 'ITC') { basePrice = 430; volatility = 0.020; drift = 0.0011; }
+  // State Bank of India
+  else if (clean === 'SBIN') { basePrice = 830; volatility = 0.035; drift = 0.0014; }
+  // Tata Motors
+  else if (clean === 'TATAMOTORS') { basePrice = 980; volatility = 0.045; drift = 0.0020; }
+  // Tata Steel
+  else if (clean === 'TATASTEEL') { basePrice = 175; volatility = 0.040; drift = 0.0015; }
+  // Bajaj Finance
+  else if (clean === 'BAJFINANCE') { basePrice = 7200; volatility = 0.040; drift = 0.0022; }
+  // Larsen & Toubro
+  else if (clean === 'LT') { basePrice = 3400; volatility = 0.030; drift = 0.0016; }
+  // Hindustan Unilever
+  else if (clean === 'HINDUNILVR') { basePrice = 2450; volatility = 0.025; drift = 0.0011; }
+  else if (clean === 'SUZLON') { basePrice = 68; volatility = 0.075; drift = 0.0045; }
+  else if (clean === 'IRFC') { basePrice = 175; volatility = 0.050; drift = 0.0035; }
+  else if (clean === 'RVNL') { basePrice = 410; volatility = 0.065; drift = 0.0040; }
+  else if (clean === 'YESBANK') { basePrice = 23; volatility = 0.060; drift = -0.0010; }
+  else if (clean === 'IREDA') { basePrice = 215; volatility = 0.070; drift = 0.0050; }
+  else if (clean === 'NHPC') { basePrice = 95; volatility = 0.040; drift = 0.0025; }
+  else if (clean === 'TATAPOWER') { basePrice = 440; volatility = 0.035; drift = 0.0020; }
+  else if (clean === 'ZOMATO') { basePrice = 185; volatility = 0.055; drift = 0.0038; }
+  else if (clean === 'PAYTM') { basePrice = 380; volatility = 0.080; drift = -0.0025; }
+  else if (clean === 'NYKAA') { basePrice = 165; volatility = 0.045; drift = 0.0010; }
+  else if (clean === 'IDEA') { basePrice = 16; volatility = 0.090; drift = -0.0015; }
+
+  // Adjust simulation so we might intentionally cross key indicators
+  // like RSI being in the 55-63 zone
+  const closes: number[] = [];
+  const highs: number[] = [];
+  const lows: number[] = [];
+  const volumes: number[] = [];
+  const timestamps: number[] = [];
+
+  const now = Date.now();
+  const oneWeek = 7 * 24 * 60 * 60 * 1000;
+  let currentPrice = basePrice * Math.pow(1 - drift, 260);
+
+  // We add sinusoidal cycles to RSI and breakout logic
+  for (let i = 0; i < 260; i++) {
+    const ts = now - (260 - i) * oneWeek;
+    timestamps.push(Math.floor(ts / 1000));
+
+    const cycle = Math.sin(i / 10) * volatility * 1.5;
+    const changePercent = drift + cycle + (Math.random() - 0.5) * 2 * volatility;
+    
+    // Create occasional beautiful weekly volume spikes and breakout candles
+    let spike = 1;
+    let breakout = 0;
+    if (i > 240 && Math.random() < 0.15) {
+      spike = 2.2 + Math.random() * 1.5; // High volume
+      breakout = volatility * 2.5; // Upward breakout
+    }
+
+    currentPrice = currentPrice * (1 + changePercent + breakout);
+    if (currentPrice < 1) currentPrice = 1;
+
+    closes.push(parseFloat(currentPrice.toFixed(2)));
+    const spread = currentPrice * volatility * (0.4 + Math.random() * 0.6);
+    highs.push(parseFloat((currentPrice + spread * 0.6).toFixed(2)));
+    lows.push(parseFloat((Math.max(1, currentPrice - spread * 0.6)).toFixed(2)));
+
+    const baseVolume = 12000000;
+    volumes.push(Math.floor(baseVolume * (0.6 + Math.random() * 0.8) * spike));
+  }
+
+  return {
+    meta: { symbol: ticker.toUpperCase(), longName },
+    closes,
+    highs,
+    lows,
+    volumes,
+    timestamps
+  };
+}
+
+// Fetch stock details and compute indicators
+async function getStockData(ticker: string, forceSynthetic = false): Promise<StockDetails> {
+  let upperTicker = ticker.toUpperCase().trim();
+  // Automatically append .NS for Indian NSE stocks if no suffix is present
+  if (!upperTicker.includes('.') && upperTicker !== 'NIFTY' && upperTicker !== 'SENSEX') {
+    upperTicker = `${upperTicker}.NS`;
+  }
+  let rawData;
+  let isLiveResult = false;
+
+  if (!forceSynthetic) {
+    try {
+      // Attempt real live Yahoo Finance Weekly chart download
+      const url = `https://query2.finance.yahoo.com/v8/finance/chart/${upperTicker}?interval=1wk&range=5y`;
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        }
+      });
+
+      if (res.ok) {
+        const json = await res.json() as any;
+        const result = json.chart?.result?.[0];
+        if (result && result.indicators?.quote?.[0]?.close?.length > 10) {
+          const quote = result.indicators.quote[0];
+          const timestamps = result.timestamp || [];
+          
+          // Filter out null/undefined points to guarantee flawless indicators
+          const validCloses: number[] = [];
+          const validHighs: number[] = [];
+          const validLows: number[] = [];
+          const validVolumes: number[] = [];
+          const validTimestamps: number[] = [];
+
+          for (let i = 0; i < quote.close.length; i++) {
+            if (quote.close[i] !== null && quote.close[i] !== undefined &&
+                quote.high[i] !== null && quote.high[i] !== undefined &&
+                quote.low[i] !== null && quote.low[i] !== undefined) {
+              validCloses.push(quote.close[i]);
+              validHighs.push(quote.high[i]);
+              validLows.push(quote.low[i]);
+              validVolumes.push(quote.volume[i] || 100000);
+              validTimestamps.push(timestamps[i]);
+            }
+          }
+
+          if (validCloses.length > 50) {
+            rawData = {
+              meta: { symbol: upperTicker, longName: result.meta?.longName || getStockLongName(upperTicker) },
+              closes: validCloses,
+              highs: validHighs,
+              lows: validLows,
+              volumes: validVolumes,
+              timestamps: validTimestamps
+            };
+            isLiveResult = true;
+          }
+        }
+      }
+    } catch (err) {
+      console.log(`Failed to fetch live Yahoo Finance for ${upperTicker}, using premium simulator fallback`);
+    }
+  }
+
+  // Fallback if network fails, rate-limited, or data is corrupt
+  if (!rawData) {
+    rawData = generateSyntheticStockData(upperTicker);
+  }
+
+  const { closes, highs, lows, volumes, timestamps, meta } = rawData;
+  const len = closes.length;
+
+  // Calculate Indicator Lines
+  const ema20 = calculateEMA(closes, 20);
+  const ema50 = calculateEMA(closes, 50);
+  const ema200 = calculateEMA(closes, 200);
+  const rsi = calculateRSI(closes, 14);
+  const volumeSma20 = calculateSMA(volumes, 20);
+
+  // 8-Week High of PREVIOUS weeks (prior to current week index)
+  const high8w: number[] = [];
+  for (let i = 0; i < len; i++) {
+    if (i < 8) {
+      high8w.push(closes[i]);
+    } else {
+      let maxHigh = -Infinity;
+      for (let j = i - 8; j < i; j++) {
+        if (highs[j] > maxHigh) maxHigh = highs[j];
+      }
+      high8w.push(maxHigh);
+    }
+  }
+
+  // Assemble weekly points
+  const history: StockPoint[] = [];
+  for (let i = 0; i < len; i++) {
+    const dateObj = new Date(timestamps[i] * 1000);
+    const dateStr = formatCustomDate(dateObj);
+    history.push({
+      date: dateStr,
+      close: closes[i],
+      high: highs[i],
+      low: lows[i],
+      volume: volumes[i],
+      ema20: parseFloat(ema20[i].toFixed(2)),
+      ema50: parseFloat(ema50[i].toFixed(2)),
+      ema200: parseFloat(ema200[i].toFixed(2)),
+      rsi: parseFloat(rsi[i].toFixed(1)),
+      volumeSma20: Math.round(volumeSma20[i]),
+      high8w: parseFloat(high8w[i].toFixed(2))
+    });
+  }
+
+  // Current values
+  const currClose = closes[len - 1];
+  const currEma20 = ema20[len - 1];
+  const currEma50 = ema50[len - 1];
+  const currEma200 = ema200[len - 1];
+  const currRsi = rsi[len - 1];
+  const currVolume = volumes[len - 1];
+  const currVolSma20 = volumeSma20[len - 1];
+  const currHigh8w = high8w[len - 1];
+
+  // Calculate percentage change based on previous week
+  const prevClose = closes[len - 2] || currClose;
+  const change = parseFloat((((currClose - prevClose) / prevClose) * 100).toFixed(2));
+
+  // Check custom filter rules requested by user
+  const closeAbove100 = currClose > 100;
+  const closeAbove20wEma = currClose > currEma20;
+  const closeAbove50wEma = currClose > currEma50;
+  const closeAbove200wEma = currClose > currEma200;
+  const rsiBetween55And63 = currRsi >= 55 && currRsi <= 63;
+  const volumeAbove1_8Sma20 = currVolume > 1.8 * currVolSma20;
+  const closeAbove8wHigh = currClose > currHigh8w;
+
+  // Calculate buy/sell recommendation score (out of 100)
+  let score = 50; // default neural hold
+  if (closeAbove20wEma) score += 8;
+  if (closeAbove50wEma) score += 8;
+  if (closeAbove200wEma) score += 9;
+  if (rsiBetween55And63) score += 15; // User's high-probability momentum filter zone
+  if (volumeAbove1_8Sma20) score += 15; // Heavy institutional conviction breakout
+  if (closeAbove8wHigh) score += 15; // Key horizontal breakout
+  if (currRsi > 70) score -= 12; // Overbought pullback risk
+  if (currRsi < 35) score += 10; // Oversold opportunity
+
+  let recommendation = 'HOLD';
+  if (score >= 78) recommendation = 'STRONG BUY';
+  else if (score >= 62) recommendation = 'BUY';
+  else if (score <= 25) recommendation = 'STRONG SELL';
+  else if (score <= 40) recommendation = 'SELL';
+
+  // Entry Signal Guide
+  let entryRecommendation = 'WAITING FOR CONFIRMATION';
+  if (rsiBetween55And63 && volumeAbove1_8Sma20 && closeAbove8wHigh) {
+    entryRecommendation = 'CRITICAL PERFECT ENTRY';
+  } else if (closeAbove8wHigh && volumeAbove1_8Sma20) {
+    entryRecommendation = 'BREAKOUT ENTRY (HIGH VOLUME)';
+  } else if (rsiBetween55And63 && closeAbove20wEma) {
+    entryRecommendation = 'MOMENTUM CONVICTION ENTRY';
+  } else if (currRsi < 35 && currClose > currEma200) {
+    entryRecommendation = 'ACCUMULATION ZONE (MAJOR EMA SUPPORT)';
+  } else if (currRsi > 72) {
+    entryRecommendation = 'TAKE PROFIT / REDUCE RISK';
+  } else if (currClose < currEma50) {
+    entryRecommendation = 'AVOID (UNDER 50W EMA)';
+  } else {
+    entryRecommendation = 'HOLD POSITION (NEUTRAL ZONE)';
+  }
+
+  // Filter history to latest 50 weeks for elegant chart performance
+  const displayHistory = history.slice(-50);
+
+  return {
+    ticker: upperTicker,
+    name: meta.longName,
+    price: currClose,
+    change,
+    history: displayHistory,
+    indicators: {
+      close: currClose,
+      ema20: parseFloat(currEma20.toFixed(2)),
+      ema50: parseFloat(currEma50.toFixed(2)),
+      ema200: parseFloat(currEma200.toFixed(2)),
+      rsi: parseFloat(currRsi.toFixed(1)),
+      volume: currVolume,
+      volumeSma20: Math.round(currVolSma20),
+      high8w: parseFloat(currHigh8w.toFixed(2))
+    },
+    filtersMatched: {
+      closeAbove100,
+      closeAbove20wEma,
+      closeAbove50wEma,
+      closeAbove200wEma,
+      rsiBetween55And63,
+      volumeAbove1_8Sma20,
+      closeAbove8wHigh
+    },
+    recommendation,
+    recommendationScore: score,
+    entryRecommendation,
+    isLive: isLiveResult
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Live cache + background warmer
+// ---------------------------------------------------------------------------
+// Fetching live weekly data for ~2000 stocks on every request is impossible
+// within a request timeout. Instead we keep an in-memory cache and warm it in
+// the background in small concurrent batches. The list endpoint always returns
+// instantly: cached live data where available, a synthetic placeholder
+// otherwise. Entries flip to `isLive: true` as the warmer catches up.
+
+interface CacheEntry {
+  data: StockDetails; // list-shaped (history stripped)
+  ts: number;         // last successful live refresh (ms)
+  live: boolean;      // whether the cached data came from a live fetch
+}
+
+const liveCache = new Map<string, CacheEntry>();
+const REFRESH_TTL_MS = 30 * 60 * 1000; // re-refresh a live entry after 30 min
+const WARM_CONCURRENCY = 4;            // parallel live fetches per batch
+const BATCH_DELAY_MS = 400;            // pause between batches to be gentle on Yahoo
+
+// Build the ordered ticker universe, hot (large-cap) names first for instant value.
+function buildTickerUniverse(): string[] {
+  const hot = new Set(DEFAULT_TICKERS);
+  const rest: string[] = [];
+  for (const s of INDIAN_STOCKS) {
+    const suffix = s.exchange === 'NSE' ? '.NS' : '.BO';
+    const t = `${s.symbol}${suffix}`;
+    if (!hot.has(t)) rest.push(t);
+  }
+  return [...DEFAULT_TICKERS, ...rest];
+}
+const TICKER_UNIVERSE = buildTickerUniverse();
+
+function toListShape(data: StockDetails): StockDetails {
+  return { ...data, history: [] }; // strip heavy history for the list payload
+}
+
+// Warm a single ticker: fetch live, fall back to synthetic, always cache something.
+async function warmTicker(ticker: string): Promise<void> {
+  try {
+    const live = await getStockData(ticker, false);
+    liveCache.set(ticker, { data: toListShape(live), ts: Date.now(), live: !!live.isLive });
+  } catch {
+    // Never throw from the warmer; ensure the ticker still has a placeholder.
+    if (!liveCache.has(ticker)) {
+      try {
+        const synth = await getStockData(ticker, true);
+        liveCache.set(ticker, { data: toListShape(synth), ts: 0, live: false });
+      } catch { /* ignore */ }
+    }
+  }
+}
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+// Continuous background loop: cycle through the universe, refreshing stale/uncached entries.
+async function startWarmer(): Promise<void> {
+  console.log(`Live warmer started for ${TICKER_UNIVERSE.length} tickers`);
+  // Never let the loop die; keep cycling forever.
+  for (;;) {
+    for (let i = 0; i < TICKER_UNIVERSE.length; i += WARM_CONCURRENCY) {
+      const batch = TICKER_UNIVERSE.slice(i, i + WARM_CONCURRENCY).filter(t => {
+        const entry = liveCache.get(t);
+        // Refresh if never fetched live, or the live data is older than the TTL.
+        return !entry || !entry.live || (Date.now() - entry.ts) > REFRESH_TTL_MS;
+      });
+      if (batch.length > 0) {
+        await Promise.all(batch.map(warmTicker));
+        await sleep(BATCH_DELAY_MS);
+      }
+    }
+    await sleep(5000); // brief pause before the next full cycle
+  }
+}
+
+// 1. Core Stocks Endpoint — instant, served from cache with synthetic fallback.
+app.get("/api/stocks", async (req, res) => {
+  try {
+    const results = await Promise.all(TICKER_UNIVERSE.map(async (t) => {
+      const cached = liveCache.get(t);
+      if (cached) return cached.data;
+      // Not warmed yet: return a synthetic placeholder and seed the cache.
+      const synth = toListShape(await getStockData(t, true));
+      liveCache.set(t, { data: synth, ts: 0, live: false });
+      return synth;
+    }));
+    const liveCount = results.filter(r => r.isLive).length;
+    res.json({ stocks: results, meta: { total: results.length, live: liveCount } });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 1.5 Live Detailed Stock Endpoint (fetches real Yahoo Finance on-demand)
+app.get("/api/stocks/detail", async (req, res) => {
+  const { ticker } = req.query;
+  if (!ticker || typeof ticker !== "string") {
+    res.status(400).json({ error: "Missing ticker query parameter" });
+    return;
+  }
+  try {
+    const data = await getStockData(ticker, false); // forceSynthetic = false for genuine live yfinance
+    res.json({ stock: data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Dynamic Ticker Addition Endpoint
+app.post("/api/stocks/add", async (req, res) => {
+  const { ticker } = req.body;
+  if (!ticker || typeof ticker !== "string" || ticker.trim().length === 0) {
+    res.status(400).json({ error: "Invalid stock ticker symbol" });
+    return;
+  }
+  const cleanTicker = ticker.trim().toUpperCase();
+  try {
+    const data = await getStockData(cleanTicker, false); // Fetch live first for additions
+    res.json({ success: true, stock: data });
+  } catch (err: any) {
+    res.status(500).json({ error: `Could not fetch ticker ${cleanTicker}: ${err.message}` });
+  }
+});
+
+// 3. Gemini Stock Analysis Endpoint
+app.post("/api/stocks/analyze", async (req: Request, res: Response) => {
+  const { ticker, indicators, entryRecommendation, recommendation } = req.body;
+
+  if (!ticker) {
+    res.status(400).json({ error: "Missing ticker" });
+    return;
+  }
+
+  // Fail clearly (not with a 500) when the key hasn't been configured yet.
+  if (!GEMINI_API_KEY) {
+    res.status(503).json({
+      error: "Gemini API key not configured. Set the GEMINI_API_KEY environment variable to enable AI analysis (see DEPLOY.md for how to get a free key)."
+    });
+    return;
+  }
+
+  const stockName = getStockLongName(ticker);
+
+  const prompt = `
+  Analyze this stock for professional traders. Give concrete, actionable trading advice.
+  
+  Stock: ${ticker} (${stockName})
+  Current Price: ₹${indicators.close}
+  
+  Technical Indicators:
+  - 20-Week EMA: ₹${indicators.ema20}
+  - 50-Week EMA: ₹${indicators.ema50}
+  - 200-Week EMA: ₹${indicators.ema200}
+  - Weekly RSI: ${indicators.rsi}
+  - Weekly Volume: ${indicators.volume.toLocaleString()}
+  - 20-Week Volume SMA: ${indicators.volumeSma20.toLocaleString()}
+  - Previous 8-Week High: ₹${indicators.high8w}
+  
+  Key Screening Filters:
+  - Close > 100: ${indicators.close > 100 ? "PASS ✅" : "FAIL ❌"}
+  - Close > 20W EMA: ${indicators.close > indicators.ema20 ? "PASS ✅" : "FAIL ❌"}
+  - Close > 50W EMA: ${indicators.close > indicators.ema50 ? "PASS ✅" : "FAIL ❌"}
+  - Close > 200W EMA: ${indicators.close > indicators.ema200 ? "PASS ✅" : "FAIL ❌"}
+  - Weekly RSI between 55 and 63: ${indicators.rsi >= 55 && indicators.rsi <= 63 ? "PASS ✅" : "FAIL ❌"}
+  - Weekly Volume > 1.8x SMA20: ${indicators.volume > 1.8 * indicators.volumeSma20 ? "PASS ✅" : "FAIL ❌"}
+  - Close > Previous 8-Week High: ${indicators.close > indicators.high8w ? "PASS ✅" : "FAIL ❌"}
+  
+  Auto Recommendation: ${recommendation}
+  Entry Recommendation Signal: ${entryRecommendation}
+  
+  Format your analysis in clean JSON that matches this schema:
+  {
+    "summary": "Brief 2-sentence executive summary of the setup",
+    "shouldBuyHoldSell": "BUY" | "STRONG BUY" | "HOLD" | "SELL" | "STRONG SELL",
+    "isEntryGood": "YES" | "NO" | "WAIT",
+    "entryReasoning": "1-2 sentences explain why or why not a good entry right now",
+    "entryPriceTarget": "₹XXXX.XX (Target Entry in Rupees)",
+    "stopLoss": "₹XXXX.XX (Recommended tight stop loss in Rupees)",
+    "takeProfitTarget": "₹XXXX.XX (Logical exit target in Rupees)",
+    "riskRewardRatio": "e.g., 1:2.8",
+    "catalystDetails": "What primary indicator or condition triggers this trade conviction (e.g., High-volume 8-week breakout, RSI momentum zone, or major EMA support)."
+  }
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            summary: { type: Type.STRING },
+            shouldBuyHoldSell: { type: Type.STRING },
+            isEntryGood: { type: Type.STRING },
+            entryReasoning: { type: Type.STRING },
+            entryPriceTarget: { type: Type.STRING },
+            stopLoss: { type: Type.STRING },
+            takeProfitTarget: { type: Type.STRING },
+            riskRewardRatio: { type: Type.STRING },
+            catalystDetails: { type: Type.STRING }
+          },
+          required: [
+            "summary", "shouldBuyHoldSell", "isEntryGood", "entryReasoning",
+            "entryPriceTarget", "stopLoss", "takeProfitTarget", "riskRewardRatio", "catalystDetails"
+          ]
+        }
+      }
+    });
+
+    const resultText = response.text || "{}";
+    res.json(JSON.parse(resultText));
+  } catch (err: any) {
+    console.error("Gemini stock analysis error:", err);
+    res.status(500).json({ error: "AI analysis failed, please retry", details: err.message });
+  }
+});
+
+// Serve static assets in production, handle Vite in development
+async function startServer() {
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Professional Stock Screener Server running on port ${PORT}`);
+    // Kick off the background live-data warmer (runs for the life of the process).
+    startWarmer().catch(err => console.error("Warmer crashed:", err));
+  });
+}
+
+startServer();

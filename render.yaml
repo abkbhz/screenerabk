@@ -1,0 +1,25 @@
+# Render blueprint for the backend API (Express server in server.ts).
+# Deploy: Render Dashboard -> New -> Blueprint -> connect this repo.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: abk-screener-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/stocks
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Paste your Gemini API key in the Render dashboard (kept secret).
+      - key: GEMINI_API_KEY
+        sync: false
+      # Your Vercel frontend origin, e.g. https://abk-screener.vercel.app
+      # Use * while testing; lock it to your domain for production.
+      - key: FRONTEND_ORIGIN
+        value: "*"
+      # Optional: override the Gemini model. Defaults to gemini-3.5-flash.
+      - key: GEMINI_MODEL
+        sync: false
+

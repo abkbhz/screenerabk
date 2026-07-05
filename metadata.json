@@ -1,0 +1,6 @@
+{
+  "name": "Indian Stock Screener & Technical Filter",
+  "description": "Professional Indian stock screener tracking live NSE equities and filtering market data based on custom technical rules (EMA, RSI, Volume breakouts) with Gemini AI entry/exit analysis.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
