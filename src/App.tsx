@@ -5,6 +5,7 @@ import StockChart from "./components/StockChart";
 import AiAnalysisPanel from "./components/AiAnalysisPanel";
 import InvestmentCalculator from "./components/InvestmentCalculator";
 import BacktestPanel from "./components/BacktestPanel";
+import DailyDecisionEngine from "./components/DailyDecisionEngine";
 import { apiUrl } from "./api";
 import { 
   TrendingUp, TrendingDown, Search, Plus, RotateCw, 
@@ -93,6 +94,15 @@ export default function App() {
   // (chart history + projections) then streams in via loadDetail.
   const handleSelectStock = (stock: StockDetails) => {
     setSelectedStock(stock);
+  };
+
+  // Select a stock by ticker (used by the Daily Decision Engine result cards).
+  const handleSelectByTicker = (ticker: string) => {
+    const found = stocks.find(s => s.ticker === ticker);
+    if (found) {
+      setSelectedStock(found);
+      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    }
   };
 
   const loadDetail = async (ticker: string) => {
@@ -194,6 +204,12 @@ export default function App() {
       });
     });
   }, [stocks, filters]);
+
+  // Stage-2 (Daily Decision Engine) operates on the weekly-matched watchlist.
+  // Only meaningful when weekly filters are active; otherwise the "matches" are
+  // the entire universe, which we don't feed into the daily stage.
+  const hasActiveFilters = Object.values(filters).some(Boolean);
+  const weeklyMatches = hasActiveFilters ? filteredStocks : [];
 
   // Color logic helper for entry badges
   const getEntryLabelColor = (rec: string) => {
@@ -552,7 +568,14 @@ export default function App() {
 
         {/* Right column: Charts, metric scorecard, and Gemini panel */}
         <section className="flex-1 flex flex-col gap-5">
-          
+
+          {/* Stage 2: Daily Decision Engine — runs on the weekly-matched watchlist */}
+          <DailyDecisionEngine
+            weeklyMatches={weeklyMatches}
+            hasActiveFilters={hasActiveFilters}
+            onSelectTicker={handleSelectByTicker}
+          />
+
           {selectedStock ? (
             <div className="flex flex-col gap-5">
               

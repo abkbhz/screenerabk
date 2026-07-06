@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  ResponsiveContainer, AreaChart, Area, LineChart, Line, BarChart, Bar,
+  ResponsiveContainer, AreaChart, Area, LineChart, Line, BarChart, Bar, ComposedChart,
   XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine, ReferenceArea, Brush
 } from "recharts";
 import { StockPoint } from "../types";
 import { apiUrl } from "../api";
-import { Activity, TrendingUp, BarChart3, Loader2 } from "lucide-react";
+import { Activity, TrendingUp, BarChart3, Loader2, CandlestickChart } from "lucide-react";
 
 interface StockChartProps {
   ticker: string;
@@ -16,7 +16,7 @@ const TIMEFRAMES = ["1D", "5D", "1M", "6M", "1Y", "5Y", "10Y"] as const;
 type TF = typeof TIMEFRAMES[number];
 
 export default function StockChart({ ticker, initialHistory }: StockChartProps) {
-  const [activeTab, setActiveTab] = useState<"price" | "rsi" | "volume">("price");
+  const [activeTab, setActiveTab] = useState<"price" | "candle" | "rsi" | "volume">("price");
   const [tf, setTf] = useState<TF>("1Y");
   const [points, setPoints] = useState<StockPoint[]>(initialHistory || []);
   const [resLabel, setResLabel] = useState<string>("Daily");
@@ -47,6 +47,68 @@ export default function StockChart({ ticker, initialHistory }: StockChartProps) 
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [ticker, tf]);
+
+  // Prepare candlestick data: ensure every bar has an open (fall back to the
+  // prior bar's close) and a [low, high] range the bar shape stretches across.
+  const candleData = useMemo(() => {
+    return points.map((p, i) => {
+      const open = p.open ?? points[i - 1]?.close ?? p.close;
+      return { ...p, open, candleRange: [p.low, p.high] as [number, number] };
+    });
+  }, [points]);
+
+  const priceDomain = useMemo<[number, number] | undefined>(() => {
+    if (!candleData.length) return undefined;
+    let lo = Infinity, hi = -Infinity;
+    for (const p of candleData) { lo = Math.min(lo, p.low); hi = Math.max(hi, p.high); }
+    const pad = (hi - lo) * 0.05 || hi * 0.02;
+    return [parseFloat((lo - pad).toFixed(2)), parseFloat((hi + pad).toFixed(2))];
+  }, [candleData]);
+
+  // Custom candlestick shape. Recharts gives us the pixel rect for the bar's
+  // [low, high] range (y = high pixel, y+height = low pixel); we linearly map
+  // open/close into that band to draw the body, and a thin wick high→low.
+  const Candle = (props: any) => {
+    const { x, y, width, height, payload } = props;
+    const { open, close, high, low } = payload;
+    const span = high - low;
+    const ratio = span > 0 ? height / span : 0;
+    const openY = y + (high - open) * ratio;
+    const closeY = y + (high - close) * ratio;
+    const isUp = close >= open;
+    const color = isUp ? "#10b981" : "#f43f5e";
+    const bodyTop = Math.min(openY, closeY);
+    const bodyH = Math.max(1, Math.abs(closeY - openY));
+    const cx = x + width / 2;
+    const bodyW = Math.max(1, width * 0.6);
+    return (
+      <g stroke={color} fill={color}>
+        <line x1={cx} x2={cx} y1={y} y2={y + height} strokeWidth={1} />
+        <rect x={cx - bodyW / 2} y={bodyTop} width={bodyW} height={bodyH} stroke="none" />
+      </g>
+    );
+  };
+
+  const CandleTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      const p = payload[0]?.payload;
+      if (!p) return null;
+      const fmt = (v: number) => `₹${Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const up = p.close >= p.open;
+      return (
+        <div className="bg-[#0b0f19] border border-slate-800 p-3 rounded-lg shadow-2xl font-mono text-xs text-slate-300">
+          <p className="text-slate-400 font-semibold mb-1">{label}</p>
+          {([["O", p.open], ["H", p.high], ["L", p.low], ["C", p.close]] as const).map(([k, v]) => (
+            <div key={k} className="flex justify-between gap-4 py-0.5">
+              <span>{k}:</span>
+              <span className={`font-bold ${k === "C" ? (up ? "text-emerald-400" : "text-rose-400") : "text-slate-100"}`}>{fmt(v)}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return null;
+  };
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
@@ -87,7 +149,7 @@ export default function StockChart({ ticker, initialHistory }: StockChartProps) 
 
         {/* Facet toggles */}
         <div className="flex bg-[#0f172a] p-1 rounded-lg border border-slate-800 self-stretch sm:self-auto">
-          {([["price", TrendingUp, "Price"], ["rsi", Activity, "RSI"], ["volume", BarChart3, "Volume"]] as const).map(([key, Icon, text]) => (
+          {([["price", TrendingUp, "Price"], ["candle", CandlestickChart, "Candles"], ["rsi", Activity, "RSI"], ["volume", BarChart3, "Volume"]] as const).map(([key, Icon, text]) => (
             <button
               key={key}
               onClick={() => setActiveTab(key as any)}
@@ -152,6 +214,19 @@ export default function StockChart({ ticker, initialHistory }: StockChartProps) 
               <Brush dataKey="date" height={22} stroke="#334155" fill="#0c101b" travellerWidth={8} tickFormatter={() => ""} />
             </AreaChart>
           </ResponsiveContainer>
+        ) : activeTab === "candle" ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={candleData} margin={{ top: 10, right: 5, left: -25, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+              <XAxis dataKey="date" stroke="#4b5563" fontSize={10} minTickGap={40} interval="preserveStartEnd" />
+              <YAxis stroke="#4b5563" fontSize={10} domain={priceDomain ?? ['auto', 'auto']} tickFormatter={(val) => `₹${val}`} />
+              <Tooltip content={<CandleTooltip />} />
+              <Bar dataKey="candleRange" shape={<Candle />} isAnimationActive={false} />
+              <Line name="20 EMA" type="monotone" dataKey="ema20" stroke="#f59e0b" strokeWidth={1.5} dot={false} />
+              <Line name="50 EMA" type="monotone" dataKey="ema50" stroke="#3b82f6" strokeWidth={1.5} dot={false} />
+              <Brush dataKey="date" height={22} stroke="#334155" fill="#0c101b" travellerWidth={8} tickFormatter={() => ""} />
+            </ComposedChart>
+          </ResponsiveContainer>
         ) : activeTab === "rsi" ? (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={points} margin={{ top: 10, right: 5, left: -25, bottom: 0 }}>
@@ -188,6 +263,15 @@ export default function StockChart({ ticker, initialHistory }: StockChartProps) 
             <span className="flex items-center gap-1 text-blue-500"><span className="w-2.5 h-0.5 bg-[#3b82f6]" /> 50 EMA</span>
             <span className="flex items-center gap-1 text-purple-500"><span className="w-2.5 h-0.5 bg-[#a855f7]" /> 200 EMA</span>
             <span className="text-slate-600">Drag the bar below the chart to zoom</span>
+          </>
+        )}
+        {activeTab === "candle" && (
+          <>
+            <span className="flex items-center gap-1 text-emerald-400"><span className="w-2 h-2.5 bg-[#10b981]" /> Up candle (close ≥ open)</span>
+            <span className="flex items-center gap-1 text-rose-400"><span className="w-2 h-2.5 bg-[#f43f5e]" /> Down candle</span>
+            <span className="flex items-center gap-1 text-amber-500"><span className="w-2.5 h-0.5 bg-[#f59e0b]" /> 20 EMA</span>
+            <span className="flex items-center gap-1 text-blue-500"><span className="w-2.5 h-0.5 bg-[#3b82f6]" /> 50 EMA</span>
+            <span className="text-slate-600">Drag the bar below to zoom</span>
           </>
         )}
         {activeTab === "rsi" && (

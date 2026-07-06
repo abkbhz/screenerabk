@@ -78,6 +78,7 @@ function formatCustomDate(dateObj: Date): string {
 // Indicator interfaces
 interface StockPoint {
   date: string;
+  open?: number;
   close: number;
   high: number;
   low: number;
@@ -693,6 +694,8 @@ app.get("/api/stocks/detail", async (req, res) => {
 
 function normalizeTicker(ticker: string): string {
   let t = ticker.toUpperCase().trim();
+  // Index symbols (e.g. ^NSEI) and already-suffixed tickers are left as-is.
+  if (t.startsWith('^')) return t;
   if (!t.includes('.') && t !== 'NIFTY' && t !== 'SENSEX') t = `${t}.NS`;
   return t;
 }
@@ -737,9 +740,12 @@ async function fetchYahooSeries(ticker: string, interval: string, range: string)
     const quote = result?.indicators?.quote?.[0];
     if (!result || !quote?.close?.length) return null;
     const timestamps: number[] = result.timestamp || [];
-    const closes: number[] = [], highs: number[] = [], lows: number[] = [], volumes: number[] = [], stamps: number[] = [];
+    const opens: number[] = [], closes: number[] = [], highs: number[] = [], lows: number[] = [], volumes: number[] = [], stamps: number[] = [];
     for (let i = 0; i < quote.close.length; i++) {
       if (quote.close[i] != null && quote.high[i] != null && quote.low[i] != null) {
+        // Open occasionally comes back null even when OHLC is otherwise valid;
+        // fall back to the close so candlesticks always have a body.
+        opens.push(quote.open?.[i] != null ? quote.open[i] : quote.close[i]);
         closes.push(quote.close[i]);
         highs.push(quote.high[i]);
         lows.push(quote.low[i]);
@@ -748,15 +754,15 @@ async function fetchYahooSeries(ticker: string, interval: string, range: string)
       }
     }
     if (closes.length < 3) return null;
-    return { closes, highs, lows, volumes, stamps, name: result.meta?.longName || getStockLongName(t) };
+    return { opens, closes, highs, lows, volumes, stamps, name: result.meta?.longName || getStockLongName(t) };
   } catch {
     return null;
   }
 }
 
 // Build chart points (price + indicators) from a raw series.
-function buildChartPoints(raw: { closes: number[]; highs: number[]; lows: number[]; volumes: number[]; stamps: number[] }, interval: string): StockPoint[] {
-  const { closes, highs, lows, volumes, stamps } = raw;
+function buildChartPoints(raw: { opens?: number[]; closes: number[]; highs: number[]; lows: number[]; volumes: number[]; stamps: number[] }, interval: string): StockPoint[] {
+  const { opens, closes, highs, lows, volumes, stamps } = raw;
   const ema20 = calculateEMA(closes, 20);
   const ema50 = calculateEMA(closes, 50);
   const ema200 = calculateEMA(closes, 200);
@@ -764,6 +770,7 @@ function buildChartPoints(raw: { closes: number[]; highs: number[]; lows: number
   const volSma = calculateSMA(volumes, 20);
   return closes.map((c, i) => ({
     date: formatSeriesDate(stamps[i], interval),
+    open: parseFloat((opens?.[i] ?? c).toFixed(2)),
     close: parseFloat(c.toFixed(2)),
     high: parseFloat(highs[i].toFixed(2)),
     low: parseFloat(lows[i].toFixed(2)),
@@ -832,7 +839,7 @@ app.get("/api/stocks/backtest", async (req, res) => {
   try {
     const raw = await fetchYahooSeries(ticker, '1wk', '10y') || (() => {
       const s = generateSyntheticStockData(normalizeTicker(ticker));
-      return { closes: s.closes, highs: s.highs, lows: s.lows, volumes: s.volumes, stamps: s.timestamps, name: s.meta.longName };
+      return { opens: s.closes, closes: s.closes, highs: s.highs, lows: s.lows, volumes: s.volumes, stamps: s.timestamps, name: s.meta.longName };
     })();
 
     const { closes, highs, volumes, stamps } = raw;
@@ -915,6 +922,279 @@ app.get("/api/stocks/backtest", async (req, res) => {
     };
     backtestCache.set(key, { payload, ts: Date.now() });
     res.json(payload);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// STAGE 2 — Daily Decision Engine
+// ---------------------------------------------------------------------------
+// The weekly scanner (stage 1) narrows ~2000 stocks to a short watchlist. This
+// second stage runs DAILY-timeframe checks only on the stocks the user already
+// filtered on the weekly list, to time the actual entry. The weekly filters are
+// left completely untouched — this is purely additive.
+//
+// Daily checks (per user spec):
+//   1. Daily Close > 20 EMA
+//   2. Daily RSI between 50 and 65
+//   3. Daily Volume > 1.5 × 20-day average volume
+//   4. Price not overextended from the 20 EMA
+//   5. At least 5% upside before the next major resistance
+//   6. Market Trend (Bullish / Neutral / Bearish) — informational only; a
+//      Bearish Nifty does NOT by itself reject a stock.
+// Each stock is then classified BUY / WAIT / AVOID.
+
+const MAX_EXTENSION_PCT = 12;   // >12% above the 20 EMA on the daily = overextended
+const MIN_UPSIDE_PCT = 5;       // need at least 5% room to the next resistance
+const RSI_ZONE_LOW = 50;
+const RSI_ZONE_HIGH = 65;
+
+interface DailyChecks {
+  closeAbove20Ema: boolean;
+  rsiInZone: boolean;        // 50–65
+  volumeSpike: boolean;      // > 1.5× avg-20 volume
+  notOverextended: boolean;  // within MAX_EXTENSION_PCT of the 20 EMA
+  hasUpsideToResistance: boolean; // ≥ MIN_UPSIDE_PCT before next resistance
+}
+
+interface DailyTradePlan {
+  entry: number;
+  target: number;      // +5%
+  stopLoss: number;
+  riskReward: string;  // e.g. "1:2.4"
+  holdingDays: number; // estimated bars to reach target
+}
+
+interface DailyDecision {
+  ticker: string;
+  name: string;
+  classification: 'BUY' | 'WAIT' | 'AVOID';
+  reason: string;
+  checks: DailyChecks;
+  metrics: {
+    close: number;
+    ema20: number;
+    rsi: number;
+    volume: number;
+    volumeAvg20: number;
+    extensionPct: number;   // (close - ema20) / ema20 * 100
+    nextResistance: number | null;
+    upsidePct: number | null;
+  };
+  trade: DailyTradePlan | null; // present only for BUY
+  isLive: boolean;
+}
+
+interface MarketTrend {
+  trend: 'Bullish' | 'Neutral' | 'Bearish';
+  niftyClose: number;
+  niftyEma20: number;
+  isLive: boolean;
+}
+
+// Nearest overhead resistance: the lowest swing-high (pivot high) that sits
+// above the current close. Returns null when the stock is at fresh highs with
+// no overhead supply (treated as open upside).
+function findNextResistance(highs: number[], close: number, lookback = 120, k = 3): number | null {
+  const start = Math.max(k, highs.length - lookback);
+  let nearest: number | null = null;
+  for (let i = start; i < highs.length - k; i++) {
+    let isPivot = true;
+    for (let j = i - k; j <= i + k; j++) {
+      if (j !== i && highs[j] > highs[i]) { isPivot = false; break; }
+    }
+    if (isPivot && highs[i] > close) {
+      if (nearest === null || highs[i] < nearest) nearest = highs[i];
+    }
+  }
+  return nearest;
+}
+
+const marketTrendCache: { data: MarketTrend | null; ts: number } = { data: null, ts: 0 };
+const MARKET_TTL_MS = 10 * 60 * 1000;
+
+async function getMarketTrend(): Promise<MarketTrend> {
+  if (marketTrendCache.data && Date.now() - marketTrendCache.ts < MARKET_TTL_MS) {
+    return marketTrendCache.data;
+  }
+  const raw = await fetchYahooSeries('^NSEI', '1d', '6mo');
+  let result: MarketTrend;
+  if (!raw || raw.closes.length < 21) {
+    result = { trend: 'Neutral', niftyClose: 0, niftyEma20: 0, isLive: false };
+  } else {
+    const ema = calculateEMA(raw.closes, 20);
+    const i = raw.closes.length - 1;
+    const c = raw.closes[i];
+    const e = ema[i];
+    let trend: MarketTrend['trend'] = 'Neutral';
+    if (c > e * 1.005) trend = 'Bullish';
+    else if (c < e * 0.995) trend = 'Bearish';
+    result = {
+      trend,
+      niftyClose: parseFloat(c.toFixed(2)),
+      niftyEma20: parseFloat(e.toFixed(2)),
+      isLive: true,
+    };
+  }
+  marketTrendCache.data = result;
+  marketTrendCache.ts = Date.now();
+  return result;
+}
+
+const dailyDecisionCache = new Map<string, { decision: DailyDecision; ts: number }>();
+const DAILY_DECISION_TTL_MS = 10 * 60 * 1000;
+
+async function computeDailyDecision(ticker: string): Promise<DailyDecision> {
+  const key = normalizeTicker(ticker);
+  const cached = dailyDecisionCache.get(key);
+  if (cached && Date.now() - cached.ts < DAILY_DECISION_TTL_MS) return cached.decision;
+
+  const raw = await fetchYahooSeries(ticker, '1d', '1y');
+  let isLive = true;
+  let series = raw;
+  if (!series || series.closes.length < 30) {
+    const s = generateSyntheticStockData(key);
+    series = { opens: s.closes, closes: s.closes, highs: s.highs, lows: s.lows, volumes: s.volumes, stamps: s.timestamps, name: s.meta.longName };
+    isLive = false;
+  }
+
+  const { closes, highs, lows, volumes } = series;
+  const n = closes.length;
+  const emaArr = calculateEMA(closes, 20);
+  const rsiArr = calculateRSI(closes, 14);
+  const volSmaArr = calculateSMA(volumes, 20);
+
+  const i = n - 1;
+  const close = closes[i];
+  const ema20 = emaArr[i];
+  const rsi = rsiArr[i];
+  const volume = volumes[i];
+  const volumeAvg20 = volSmaArr[i];
+  const extensionPct = ema20 > 0 ? ((close - ema20) / ema20) * 100 : 0;
+  const nextResistance = findNextResistance(highs, close);
+  const upsidePct = nextResistance !== null ? ((nextResistance - close) / close) * 100 : null;
+
+  const checks: DailyChecks = {
+    closeAbove20Ema: close > ema20,
+    rsiInZone: rsi >= RSI_ZONE_LOW && rsi <= RSI_ZONE_HIGH,
+    volumeSpike: volume > 1.5 * volumeAvg20,
+    notOverextended: extensionPct <= MAX_EXTENSION_PCT,
+    // null upside = fresh highs, no overhead resistance => open sky (passes)
+    hasUpsideToResistance: upsidePct === null || upsidePct >= MIN_UPSIDE_PCT,
+  };
+
+  // Classification. Structural failures (below the 20 EMA, overextended, or no
+  // room to the next resistance) are hard AVOIDs regardless of momentum.
+  let classification: DailyDecision['classification'];
+  let reason: string;
+  if (!checks.closeAbove20Ema) {
+    classification = 'AVOID';
+    reason = 'Daily close is below the 20 EMA — trend not yet confirmed on the daily.';
+  } else if (!checks.notOverextended) {
+    classification = 'AVOID';
+    reason = `Overextended (${extensionPct.toFixed(1)}% above 20 EMA) — poor risk/reward for a fresh entry.`;
+  } else if (!checks.hasUpsideToResistance) {
+    classification = 'AVOID';
+    reason = `Only ${upsidePct?.toFixed(1)}% to the next resistance — under the 5% minimum room.`;
+  } else if (checks.rsiInZone && checks.volumeSpike) {
+    classification = 'BUY';
+    reason = 'Above 20 EMA, RSI in the 50–65 momentum zone, volume spike, room to run.';
+  } else {
+    classification = 'WAIT';
+    const missing: string[] = [];
+    if (!checks.rsiInZone) missing.push('RSI not yet in the 50–65 zone');
+    if (!checks.volumeSpike) missing.push('volume below 1.5× average');
+    reason = `Setup building but not triggered — ${missing.join(' and ')}.`;
+  }
+
+  let trade: DailyTradePlan | null = null;
+  if (classification === 'BUY') {
+    const entry = close;
+    const target = entry * 1.05;
+    // Stop below the recent 10-bar swing low / just under the 20 EMA, but cap
+    // the risk at 8% so the risk:reward stays meaningful.
+    const swingLow = Math.min(...lows.slice(Math.max(0, n - 10)));
+    let stopLoss = Math.min(swingLow, ema20 * 0.995);
+    const maxRiskStop = entry * 0.92;
+    if (stopLoss < maxRiskStop) stopLoss = maxRiskStop;
+    if (stopLoss >= entry) stopLoss = entry * 0.97; // safety fallback
+    const risk = entry - stopLoss;
+    const reward = target - entry;
+    const rr = risk > 0 ? reward / risk : 0;
+
+    // Estimate holding days from the recent average absolute daily move.
+    let moveSum = 0, cnt = 0;
+    for (let j = Math.max(1, n - 20); j < n; j++) {
+      if (closes[j - 1] > 0) { moveSum += Math.abs(closes[j] / closes[j - 1] - 1); cnt++; }
+    }
+    const avgDailyMove = cnt ? moveSum / cnt : 0.01;
+    const holdingDays = Math.min(30, Math.max(3, Math.round(0.05 / (avgDailyMove || 0.01))));
+
+    trade = {
+      entry: parseFloat(entry.toFixed(2)),
+      target: parseFloat(target.toFixed(2)),
+      stopLoss: parseFloat(stopLoss.toFixed(2)),
+      riskReward: `1:${rr.toFixed(1)}`,
+      holdingDays,
+    };
+  }
+
+  const decision: DailyDecision = {
+    ticker: key,
+    name: series.name || getStockLongName(key),
+    classification,
+    reason,
+    checks,
+    metrics: {
+      close: parseFloat(close.toFixed(2)),
+      ema20: parseFloat(ema20.toFixed(2)),
+      rsi: parseFloat(rsi.toFixed(1)),
+      volume: Math.round(volume),
+      volumeAvg20: Math.round(volumeAvg20),
+      extensionPct: parseFloat(extensionPct.toFixed(2)),
+      nextResistance: nextResistance !== null ? parseFloat(nextResistance.toFixed(2)) : null,
+      upsidePct: upsidePct !== null ? parseFloat(upsidePct.toFixed(2)) : null,
+    },
+    trade,
+    isLive,
+  };
+
+  dailyDecisionCache.set(key, { decision, ts: Date.now() });
+  return decision;
+}
+
+// 1.8 Daily Decision Engine endpoint — runs stage-2 daily checks on the
+// weekly-matched watchlist the frontend passes in.
+app.post("/api/stocks/daily-decision", async (req, res) => {
+  const tickers: string[] = Array.isArray(req.body?.tickers)
+    ? req.body.tickers.filter((t: any) => typeof t === 'string').slice(0, 60)
+    : [];
+  if (tickers.length === 0) {
+    res.status(400).json({ error: "Provide a non-empty 'tickers' array (the weekly-matched watchlist)." });
+    return;
+  }
+  try {
+    const market = await getMarketTrend();
+    const results: DailyDecision[] = [];
+    const CONCURRENCY = 4;
+    for (let i = 0; i < tickers.length; i += CONCURRENCY) {
+      const batch = tickers.slice(i, i + CONCURRENCY);
+      const settled = await Promise.all(
+        batch.map(t => computeDailyDecision(t).catch(() => null))
+      );
+      for (const d of settled) if (d) results.push(d);
+    }
+    // Order: BUY first, then WAIT, then AVOID.
+    const rank: Record<string, number> = { BUY: 0, WAIT: 1, AVOID: 2 };
+    results.sort((a, b) => rank[a.classification] - rank[b.classification]);
+    const summary = {
+      buy: results.filter(r => r.classification === 'BUY').length,
+      wait: results.filter(r => r.classification === 'WAIT').length,
+      avoid: results.filter(r => r.classification === 'AVOID').length,
+      total: results.length,
+    };
+    res.json({ market, results, summary });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

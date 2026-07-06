@@ -1,5 +1,6 @@
 export interface StockPoint {
   date: string;
+  open?: number;
   close: number;
   high: number;
   low: number;
@@ -106,6 +107,56 @@ export interface AiAnalysis {
   takeProfitTarget: string;
   riskRewardRatio: string;
   catalystDetails: string;
+}
+
+// ---- Stage 2: Daily Decision Engine ----
+export interface DailyChecks {
+  closeAbove20Ema: boolean;
+  rsiInZone: boolean;
+  volumeSpike: boolean;
+  notOverextended: boolean;
+  hasUpsideToResistance: boolean;
+}
+
+export interface DailyTradePlan {
+  entry: number;
+  target: number;
+  stopLoss: number;
+  riskReward: string;
+  holdingDays: number;
+}
+
+export interface DailyDecision {
+  ticker: string;
+  name: string;
+  classification: 'BUY' | 'WAIT' | 'AVOID';
+  reason: string;
+  checks: DailyChecks;
+  metrics: {
+    close: number;
+    ema20: number;
+    rsi: number;
+    volume: number;
+    volumeAvg20: number;
+    extensionPct: number;
+    nextResistance: number | null;
+    upsidePct: number | null;
+  };
+  trade: DailyTradePlan | null;
+  isLive: boolean;
+}
+
+export interface MarketTrend {
+  trend: 'Bullish' | 'Neutral' | 'Bearish';
+  niftyClose: number;
+  niftyEma20: number;
+  isLive: boolean;
+}
+
+export interface DailyDecisionResponse {
+  market: MarketTrend;
+  results: DailyDecision[];
+  summary: { buy: number; wait: number; avoid: number; total: number };
 }
 
 export interface MarketAlert {
