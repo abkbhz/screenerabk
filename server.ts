@@ -993,21 +993,37 @@ interface MarketTrend {
   isLive: boolean;
 }
 
-// Nearest overhead resistance: the lowest swing-high (pivot high) that sits
-// above the current close. Returns null when the stock is at fresh highs with
-// no overhead supply (treated as open upside).
-function findNextResistance(highs: number[], close: number, lookback = 120, k = 3): number | null {
-  const start = Math.max(k, highs.length - lookback);
+// Nearest MAJOR overhead resistance above the current close.
+//  - If price is within ~2% of the highest high in the lookback window it is
+//    effectively breaking out, so there is no meaningful overhead supply and we
+//    return null (open upside). This prevents a breakout being mistaken for a
+//    ceiling — the bug that flagged fresh-high stocks as "no room / AVOID".
+//  - Otherwise we find the nearest prominent swing-high (pivot, wider window)
+//    that sits a meaningful distance above price. Trivial highs right at the
+//    current level (< 0.5% above) are ignored.
+//  - As a fallback, when no clean pivot is found but price is below the range
+//    top, the recent range high itself is used as the resistance.
+function findNextResistance(highs: number[], close: number, lookback = 120, k = 4): number | null {
+  const n = highs.length;
+  const start = Math.max(k, n - lookback);
+  let recentMax = -Infinity;
+  for (let i = start; i < n; i++) recentMax = Math.max(recentMax, highs[i]);
+
+  // Breaking out to (or near) new highs => open upside.
+  if (recentMax > 0 && close >= recentMax * 0.98) return null;
+
   let nearest: number | null = null;
-  for (let i = start; i < highs.length - k; i++) {
+  for (let i = start; i < n - k; i++) {
     let isPivot = true;
     for (let j = i - k; j <= i + k; j++) {
       if (j !== i && highs[j] > highs[i]) { isPivot = false; break; }
     }
-    if (isPivot && highs[i] > close) {
+    // Require the pivot to be meaningfully (> 0.5%) above price to count as a wall.
+    if (isPivot && highs[i] > close * 1.005) {
       if (nearest === null || highs[i] < nearest) nearest = highs[i];
     }
   }
+  if (nearest === null && recentMax > close) nearest = recentMax;
   return nearest;
 }
 

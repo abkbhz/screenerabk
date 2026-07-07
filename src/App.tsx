@@ -22,6 +22,17 @@ const fmtPrice = (n: number) =>
 // universe is still searched/filtered — only the visible list is capped.
 const LIST_LIMIT = 80;
 
+// Weekly screener toggles (order preserved). `key` maps to filtersMatched.
+const FILTER_DEFS: { key: keyof FilterConfig; title: string; desc: string }[] = [
+  { key: "closeAbove100", title: "Close > ₹100", desc: "Filter out low-priced equities" },
+  { key: "closeAbove20wEma", title: "Close > 20W EMA", desc: "Short-term trend support" },
+  { key: "closeAbove50wEma", title: "Close > 50W EMA", desc: "Medium-term trend anchor" },
+  { key: "closeAbove200wEma", title: "Close > 200W EMA", desc: "Major long-term safety support" },
+  { key: "rsiBetween55And63", title: "Weekly RSI 55 - 63", desc: "Golden momentum zone" },
+  { key: "volumeAbove1_8Sma20", title: "Weekly Vol > 1.8x SMA20", desc: "Heavy institutional buying (rare)" },
+  { key: "closeAbove8wHigh", title: "Close > Prev 8W High", desc: "8-week breakout confirmation" },
+];
+
 export default function App() {
   const [stocks, setStocks] = useState<StockDetails[]>([]);
   const [selectedStock, setSelectedStock] = useState<StockDetails | null>(null);
@@ -205,6 +216,19 @@ export default function App() {
     });
   }, [stocks, filters]);
 
+  // Per-filter live match counts, so each toggle shows how many real (live)
+  // stocks currently satisfy it on its own. Makes it obvious a rare filter
+  // (e.g. weekly volume spike) is working — just genuinely selective — and that
+  // counts climb while the live cache warms after a restart.
+  const filterCounts = useMemo(() => {
+    const live = stocks.filter(s => s.isLive);
+    const counts = {} as Record<keyof FilterConfig, number>;
+    for (const { key } of FILTER_DEFS) {
+      counts[key] = live.filter(s => s.filtersMatched[key]).length;
+    }
+    return { counts, liveTotal: live.length };
+  }, [stocks]);
+
   // Stage-2 (Daily Decision Engine) operates on the weekly-matched watchlist.
   // Only meaningful when weekly filters are active; otherwise the "matches" are
   // the entire universe, which we don't feed into the daily stage.
@@ -344,101 +368,45 @@ export default function App() {
               </button>
             </div>
 
-            {/* Screener list toggles */}
+            {/* Screener list toggles — each shows how many live stocks match it now */}
             <div className="flex flex-col gap-2 font-sans">
-              
-              <label className="flex items-center gap-2.5 p-2 bg-[#0c101b]/60 border border-slate-800/50 hover:border-slate-800 rounded-xl cursor-pointer transition-all">
-                <input
-                  type="checkbox"
-                  checked={filters.closeAbove100}
-                  onChange={() => handleToggleFilter("closeAbove100")}
-                  className="rounded border-slate-800 text-emerald-600 focus:ring-emerald-500 bg-slate-900 w-4 h-4 accent-emerald-500"
-                />
-                <div className="text-xs">
-                  <span className="font-mono font-bold block text-slate-300">Close &gt; ₹100</span>
-                  <span className="text-[10px] text-slate-500 block">Filter out low-priced equities</span>
-                </div>
-              </label>
-
-              <label className="flex items-center gap-2.5 p-2 bg-[#0c101b]/60 border border-slate-800/50 hover:border-slate-800 rounded-xl cursor-pointer transition-all">
-                <input
-                  type="checkbox"
-                  checked={filters.closeAbove20wEma}
-                  onChange={() => handleToggleFilter("closeAbove20wEma")}
-                  className="rounded border-slate-800 text-emerald-600 focus:ring-emerald-500 bg-slate-900 w-4 h-4 accent-emerald-500"
-                />
-                <div className="text-xs">
-                  <span className="font-mono font-bold block text-slate-300">Close &gt; 20W EMA</span>
-                  <span className="text-[10px] text-slate-500 block">Short-term trend support</span>
-                </div>
-              </label>
-
-              <label className="flex items-center gap-2.5 p-2 bg-[#0c101b]/60 border border-slate-800/50 hover:border-slate-800 rounded-xl cursor-pointer transition-all">
-                <input
-                  type="checkbox"
-                  checked={filters.closeAbove50wEma}
-                  onChange={() => handleToggleFilter("closeAbove50wEma")}
-                  className="rounded border-slate-800 text-emerald-600 focus:ring-emerald-500 bg-slate-900 w-4 h-4 accent-emerald-500"
-                />
-                <div className="text-xs">
-                  <span className="font-mono font-bold block text-slate-300">Close &gt; 50W EMA</span>
-                  <span className="text-[10px] text-slate-500 block">Medium-term trend anchor</span>
-                </div>
-              </label>
-
-              <label className="flex items-center gap-2.5 p-2 bg-[#0c101b]/60 border border-slate-800/50 hover:border-slate-800 rounded-xl cursor-pointer transition-all">
-                <input
-                  type="checkbox"
-                  checked={filters.closeAbove200wEma}
-                  onChange={() => handleToggleFilter("closeAbove200wEma")}
-                  className="rounded border-slate-800 text-emerald-600 focus:ring-emerald-500 bg-slate-900 w-4 h-4 accent-emerald-500"
-                />
-                <div className="text-xs">
-                  <span className="font-mono font-bold block text-slate-300">Close &gt; 200W EMA</span>
-                  <span className="text-[10px] text-slate-500 block">Major long-term safety support</span>
-                </div>
-              </label>
-
-              <label className="flex items-center gap-2.5 p-2 bg-[#0c101b]/60 border border-slate-800/50 hover:border-slate-800 rounded-xl cursor-pointer transition-all">
-                <input
-                  type="checkbox"
-                  checked={filters.rsiBetween55And63}
-                  onChange={() => handleToggleFilter("rsiBetween55And63")}
-                  className="rounded border-slate-800 text-emerald-600 focus:ring-emerald-500 bg-slate-900 w-4 h-4 accent-emerald-500"
-                />
-                <div className="text-xs">
-                  <span className="font-mono font-bold block text-slate-300">Weekly RSI 55 - 63</span>
-                  <span className="text-[10px] text-slate-500 block">Golden momentum zone</span>
-                </div>
-              </label>
-
-              <label className="flex items-center gap-2.5 p-2 bg-[#0c101b]/60 border border-slate-800/50 hover:border-slate-800 rounded-xl cursor-pointer transition-all">
-                <input
-                  type="checkbox"
-                  checked={filters.volumeAbove1_8Sma20}
-                  onChange={() => handleToggleFilter("volumeAbove1_8Sma20")}
-                  className="rounded border-slate-800 text-emerald-600 focus:ring-emerald-500 bg-slate-900 w-4 h-4 accent-emerald-500"
-                />
-                <div className="text-xs">
-                  <span className="font-mono font-bold block text-slate-300">Weekly Vol &gt; 1.8x SMA20</span>
-                  <span className="text-[10px] text-slate-500 block">Heavy institutional buying</span>
-                </div>
-              </label>
-
-              <label className="flex items-center gap-2.5 p-2 bg-[#0c101b]/60 border border-slate-800/50 hover:border-slate-800 rounded-xl cursor-pointer transition-all">
-                <input
-                  type="checkbox"
-                  checked={filters.closeAbove8wHigh}
-                  onChange={() => handleToggleFilter("closeAbove8wHigh")}
-                  className="rounded border-slate-800 text-emerald-600 focus:ring-emerald-500 bg-slate-900 w-4 h-4 accent-emerald-500"
-                />
-                <div className="text-xs">
-                  <span className="font-mono font-bold block text-slate-300">Close &gt; Prev 8W High</span>
-                  <span className="text-[10px] text-slate-500 block">8-week breakout confirmation</span>
-                </div>
-              </label>
-
+              {FILTER_DEFS.map(({ key, title, desc }) => {
+                const count = filterCounts.counts[key];
+                const active = filters[key];
+                return (
+                  <label
+                    key={key}
+                    className="flex items-center gap-2.5 p-2 bg-[#0c101b]/60 border border-slate-800/50 hover:border-slate-800 rounded-xl cursor-pointer transition-all"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={active}
+                      onChange={() => handleToggleFilter(key)}
+                      className="rounded border-slate-800 text-emerald-600 focus:ring-emerald-500 bg-slate-900 w-4 h-4 accent-emerald-500"
+                    />
+                    <div className="text-xs flex-1 min-w-0">
+                      <span className="font-mono font-bold block text-slate-300">{title}</span>
+                      <span className="text-[10px] text-slate-500 block">{desc}</span>
+                    </div>
+                    <span
+                      title={`${count} live stocks currently match this filter`}
+                      className={`shrink-0 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                        count === 0
+                          ? "bg-slate-800/50 text-slate-500 border-slate-700/40"
+                          : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </label>
+                );
+              })}
             </div>
+            <p className="text-[9px] text-slate-600 font-mono mt-2.5 leading-relaxed">
+              Numbers = live stocks matching each filter alone (of {filterCounts.liveTotal} live). Some filters (e.g.
+              weekly volume spikes) are rare; stacking several narrows results fast. Counts climb for a few minutes after
+              a deploy while live data warms up.
+            </p>
           </div>
 
           {/* Tracked Equities List */}
@@ -464,9 +432,11 @@ export default function App() {
             ) : filteredStocks.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center p-6 text-center border border-dashed border-slate-800 rounded-xl bg-slate-900/10 my-auto">
                 <Filter className="text-slate-700 mb-2 animate-pulse" size={20} />
-                <h4 className="text-xs font-semibold text-slate-400">Zero Results Matched</h4>
+                <h4 className="text-xs font-semibold text-slate-400">No stocks match all selected filters</h4>
                 <p className="text-[10px] text-slate-600 mt-0.5 leading-relaxed">
-                  Try unchecking some indicators or adding a custom asset symbol.
+                  {filterCounts.liveTotal < 200
+                    ? "Live data is still warming up — counts climb over the next few minutes. Try again shortly."
+                    : "The combined filters are too strict right now. Uncheck one (watch the number badges) or add a custom symbol."}
                 </p>
               </div>
             ) : (
