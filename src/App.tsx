@@ -797,17 +797,17 @@ export default function App() {
                       <MetricCard
                         label="Weekly RSI (14)"
                         value={selectedStock.indicators.rsi}
-                        subValue="53 - 70"
-                        status={selectedStock.filtersMatched.rsiBetween53And70 ? "pass" : "fail"}
+                        subValue="55 - 70"
+                        status={selectedStock.indicators.rsi >= 55 && selectedStock.indicators.rsi <= 70 ? "pass" : "fail"}
                         ruleDescription="The perfect momentum threshold preceding parabolic expansions."
                       />
 
                       <MetricCard
-                        label="Volume Breakout"
+                        label="Weekly Volume (2.0x)"
                         value={`${(selectedStock.indicators.volume / 1000000).toFixed(1)}M`}
-                        subValue={`${((1.8 * selectedStock.indicators.volumeSma20) / 1000000).toFixed(1)}M`}
-                        status={selectedStock.filtersMatched.volumeAbove1_8Sma20 ? "pass" : "fail"}
-                        ruleDescription="Specifies heavy institutional conviction volume expansion."
+                        subValue={`${((2.0 * selectedStock.indicators.volumeSma20) / 1000000).toFixed(1)}M`}
+                        status={selectedStock.indicators.volume >= 2.0 * selectedStock.indicators.volumeSma20 || selectedStock.filtersMatched.volumeAbove2Sma20 ? "pass" : "fail"}
+                        ruleDescription="Specifies heavy institutional conviction volume expansion (>2.0x 20W SMA)."
                       />
 
                       <MetricCard
