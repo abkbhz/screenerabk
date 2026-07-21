@@ -463,15 +463,15 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
     });
   }
 
-  // Yahoo appends an INCOMPLETE current-week candle whose volume is only a
-  // fraction of a full week — evaluating the weekly screener on it makes the
-  // Volume/RSI/breakout filters almost never trigger. Real weekly screeners
-  // (e.g. Chartink) use the last COMPLETED weekly bar, so we drop a trailing
-  // partial bar (detected when the last two bars are < 6 days apart).
+  // Drop incomplete/partial trailing candles (e.g. mid-week or today's partial candle)
+  // so indicators are strictly evaluated on completed weekly bars.
   let evalIdx = len - 1;
-  if (len >= 3 && !forceSynthetic) {
-    const gapDays = (timestamps[len - 1] - timestamps[len - 2]) / 86400;
-    if (gapDays < 6) evalIdx = len - 2;
+  if (!forceSynthetic && timestamps && timestamps.length > 0) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    while (evalIdx >= 0 && (nowSec - timestamps[evalIdx]) < 5 * 86400) {
+      evalIdx--;
+    }
+    if (evalIdx < 0) evalIdx = len - 1;
   }
 
   // Current values (evaluated on the last completed weekly candle)
@@ -488,13 +488,29 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
   const prevClose = closes[evalIdx - 1] || currClose;
   const change = parseFloat((((currClose - prevClose) / prevClose) * 100).toFixed(2));
 
+  // Volume Ratios
+  const volRatio = currVolume / (currVolSma20 || 1);
+
   // Check custom filter rules requested by user
   const closeAbove100 = currClose > 100;
   const closeAbove20wEma = currClose > currEma20;
   const closeAbove50wEma = currClose > currEma50;
   const closeAbove200wEma = currClose > currEma200;
   const rsiBetween55And63 = currRsi >= 55 && currRsi <= 63;
-  const volumeAbove1_8Sma20 = currVolume > 1.8 * currVolSma20;
+  
+  // Weekly Volume Expansion Toggles
+  const volumeAbove1_2Sma20 = volRatio >= 1.2;
+  const volumeAbove1_5Sma20 = volRatio >= 1.5;
+  const volumeAbove2Sma20 = volRatio >= 2.0;
+  const volumeAbove1_8Sma20 = volRatio >= 1.8;
+
+  // Daily Volume Expansion Toggles (scaled / daily estimation)
+  const latestVol = volumes[len - 1] || currVolume;
+  const latestVolSma = volumeSma20[len - 1] || currVolSma20;
+  const dailyVolRatio = (latestVol * 5) / (latestVolSma || 1); // scale single-day to weekly equivalent
+  const dailyVolAbove1_5Sma20 = volRatio >= 1.5 || dailyVolRatio >= 1.5;
+  const dailyVolAbove2Sma20 = volRatio >= 2.0 || dailyVolRatio >= 2.0;
+
   const closeAbove8wHigh = currClose > currHigh8w;
 
   // Calculate buy/sell recommendation score (out of 100)
@@ -503,7 +519,7 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
   if (closeAbove50wEma) score += 8;
   if (closeAbove200wEma) score += 9;
   if (rsiBetween55And63) score += 15; // User's high-probability momentum filter zone
-  if (volumeAbove1_8Sma20) score += 15; // Heavy institutional conviction breakout
+  if (volumeAbove1_5Sma20 || volumeAbove1_8Sma20) score += 15; // Heavy institutional conviction breakout
   if (closeAbove8wHigh) score += 15; // Key horizontal breakout
   if (currRsi > 70) score -= 12; // Overbought pullback risk
   if (currRsi < 35) score += 10; // Oversold opportunity
@@ -516,9 +532,9 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
 
   // Entry Signal Guide
   let entryRecommendation = 'WAITING FOR CONFIRMATION';
-  if (rsiBetween55And63 && volumeAbove1_8Sma20 && closeAbove8wHigh) {
+  if (rsiBetween55And63 && (volumeAbove1_5Sma20 || volumeAbove1_8Sma20) && closeAbove8wHigh) {
     entryRecommendation = 'CRITICAL PERFECT ENTRY';
-  } else if (closeAbove8wHigh && volumeAbove1_8Sma20) {
+  } else if (closeAbove8wHigh && (volumeAbove1_5Sma20 || volumeAbove1_8Sma20)) {
     entryRecommendation = 'BREAKOUT ENTRY (HIGH VOLUME)';
   } else if (rsiBetween55And63 && closeAbove20wEma) {
     entryRecommendation = 'MOMENTUM CONVICTION ENTRY';
@@ -558,6 +574,11 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
       closeAbove200wEma,
       rsiBetween55And63,
       volumeAbove1_8Sma20,
+      volumeAbove1_2Sma20,
+      volumeAbove1_5Sma20,
+      volumeAbove2Sma20,
+      dailyVolAbove1_5Sma20,
+      dailyVolAbove2Sma20,
       closeAbove8wHigh
     },
     recommendation,

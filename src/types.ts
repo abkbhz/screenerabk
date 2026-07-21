@@ -36,6 +36,11 @@ export interface StockDetails {
     closeAbove200wEma: boolean;
     rsiBetween55And63: boolean;
     volumeAbove1_8Sma20: boolean;
+    volumeAbove1_2Sma20: boolean;
+    volumeAbove1_5Sma20: boolean;
+    volumeAbove2Sma20: boolean;
+    dailyVolAbove1_5Sma20: boolean;
+    dailyVolAbove2Sma20: boolean;
     closeAbove8wHigh: boolean;
   };
   recommendation: string; // 'STRONG BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG SELL'
@@ -94,6 +99,11 @@ export interface FilterConfig {
   closeAbove200wEma: boolean;
   rsiBetween55And63: boolean;
   volumeAbove1_8Sma20: boolean;
+  volumeAbove1_2Sma20: boolean;
+  volumeAbove1_5Sma20: boolean;
+  volumeAbove2Sma20: boolean;
+  dailyVolAbove1_5Sma20: boolean;
+  dailyVolAbove2Sma20: boolean;
   closeAbove8wHigh: boolean;
 }
 

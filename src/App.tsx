@@ -22,14 +22,17 @@ const fmtPrice = (n: number) =>
 // universe is still searched/filtered — only the visible list is capped.
 const LIST_LIMIT = 80;
 
-// Weekly screener toggles (order preserved). `key` maps to filtersMatched.
+// Weekly & Daily screener toggles (order preserved). `key` maps to filtersMatched.
 const FILTER_DEFS: { key: keyof FilterConfig; title: string; desc: string }[] = [
   { key: "closeAbove100", title: "Close > ₹100", desc: "Filter out low-priced equities" },
   { key: "closeAbove20wEma", title: "Close > 20W EMA", desc: "Short-term trend support" },
   { key: "closeAbove50wEma", title: "Close > 50W EMA", desc: "Medium-term trend anchor" },
   { key: "closeAbove200wEma", title: "Close > 200W EMA", desc: "Major long-term safety support" },
   { key: "rsiBetween55And63", title: "Weekly RSI 55 - 63", desc: "Golden momentum zone" },
-  { key: "volumeAbove1_8Sma20", title: "Weekly Vol > 1.8x SMA20", desc: "Heavy institutional buying (rare)" },
+  { key: "volumeAbove1_5Sma20", title: "Weekly Vol > 1.5x SMA20", desc: "Strong weekly volume expansion" },
+  { key: "volumeAbove2Sma20", title: "Weekly Vol > 2.0x SMA20", desc: "Heavy weekly volume breakout" },
+  { key: "dailyVolAbove1_5Sma20", title: "Daily Vol > 1.5x SMA20", desc: "Daily volume surge (>1.5x average)" },
+  { key: "dailyVolAbove2Sma20", title: "Daily Vol > 2.0x SMA20", desc: "Major daily volume breakout (>2x)" },
   { key: "closeAbove8wHigh", title: "Close > Prev 8W High", desc: "8-week breakout confirmation" },
 ];
 
@@ -55,6 +58,11 @@ export default function App() {
     closeAbove200wEma: false,
     rsiBetween55And63: false,
     volumeAbove1_8Sma20: false,
+    volumeAbove1_2Sma20: false,
+    volumeAbove1_5Sma20: false,
+    volumeAbove2Sma20: false,
+    dailyVolAbove1_5Sma20: false,
+    dailyVolAbove2Sma20: false,
     closeAbove8wHigh: false,
   });
 
@@ -255,6 +263,11 @@ export default function App() {
       closeAbove200wEma: false,
       rsiBetween55And63: false,
       volumeAbove1_8Sma20: false,
+      volumeAbove1_2Sma20: false,
+      volumeAbove1_5Sma20: false,
+      volumeAbove2Sma20: false,
+      dailyVolAbove1_5Sma20: false,
+      dailyVolAbove2Sma20: false,
       closeAbove8wHigh: false,
     });
   };
@@ -288,6 +301,11 @@ export default function App() {
         if (filterKey === "closeAbove200wEma") return stock.filtersMatched.closeAbove200wEma;
         if (filterKey === "rsiBetween55And63") return stock.filtersMatched.rsiBetween55And63;
         if (filterKey === "volumeAbove1_8Sma20") return stock.filtersMatched.volumeAbove1_8Sma20;
+        if (filterKey === "volumeAbove1_2Sma20") return stock.filtersMatched.volumeAbove1_2Sma20;
+        if (filterKey === "volumeAbove1_5Sma20") return stock.filtersMatched.volumeAbove1_5Sma20;
+        if (filterKey === "volumeAbove2Sma20") return stock.filtersMatched.volumeAbove2Sma20;
+        if (filterKey === "dailyVolAbove1_5Sma20") return stock.filtersMatched.dailyVolAbove1_5Sma20;
+        if (filterKey === "dailyVolAbove2Sma20") return stock.filtersMatched.dailyVolAbove2Sma20;
         if (filterKey === "closeAbove8wHigh") return stock.filtersMatched.closeAbove8wHigh;
         return true;
       });
