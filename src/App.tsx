@@ -37,6 +37,10 @@ export default function App() {
   const [stocks, setStocks] = useState<StockDetails[]>([]);
   const [selectedStock, setSelectedStock] = useState<StockDetails | null>(null);
   const [searchTicker, setSearchTicker] = useState("");
+  const [listSearchQuery, setListSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{ symbol: string; name: string; exchange: string }[]>([]);
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const [searchingMarket, setSearchingMarket] = useState(false);
   const [loading, setLoading] = useState(true);
   const [addingStock, setAddingStock] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +95,70 @@ export default function App() {
 
     return () => clearInterval(pollInterval);
   }, []);
+
+  // Live market search handler with debouncing across 2,800+ companies
+  useEffect(() => {
+    if (!searchTicker || searchTicker.trim().length === 0) {
+      setSearchResults([]);
+      setShowSearchDropdown(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setSearchingMarket(true);
+      try {
+        const res = await fetch(apiUrl(`/api/stocks/search?q=${encodeURIComponent(searchTicker.trim())}`));
+        if (res.ok) {
+          const data = await res.json();
+          setSearchResults(data.results || []);
+          setShowSearchDropdown(true);
+        }
+      } catch (err) {
+        console.warn("Market search error:", err);
+      } finally {
+        setSearchingMarket(false);
+      }
+    }, 120);
+
+    return () => clearTimeout(timer);
+  }, [searchTicker]);
+
+  const handleSelectSearchResult = async (symbol: string, exchange: string) => {
+    setShowSearchDropdown(false);
+    setSearchTicker("");
+    const targetTicker = exchange === 'BSE' && !symbol.includes('.') ? `${symbol}.BO` : symbol;
+    
+    // Check if ticker already in loaded stocks list
+    const found = stocks.find(s => 
+      s.ticker === targetTicker || 
+      s.ticker.replace(/\.NS$/, '').replace(/\.BO$/, '') === symbol.toUpperCase()
+    );
+    if (found) {
+      setSelectedStock(found);
+    } else {
+      setAddingStock(true);
+      setError(null);
+      try {
+        const res = await fetch(apiUrl("/api/stocks/add"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticker: targetTicker })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setStocks(prev => [data.stock, ...prev.filter(s => s.ticker !== data.stock.ticker)]);
+          setSelectedStock(data.stock);
+        } else {
+          loadDetail(targetTicker);
+        }
+      } catch (err: any) {
+        setError(err.message || `Could not load asset ${symbol}`);
+      } finally {
+        setAddingStock(false);
+      }
+    }
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   // Load the full live detail (history + projections) for the selected stock.
   // The list entries are compact (no history/projections), so whenever the
@@ -193,13 +261,23 @@ export default function App() {
 
   // Compute filtered stocks
   const filteredStocks = useMemo(() => {
+    let list = stocks;
+
+    if (listSearchQuery.trim()) {
+      const q = listSearchQuery.trim().toLowerCase();
+      list = list.filter(stock => 
+        stock.ticker.toLowerCase().includes(q) ||
+        stock.name.toLowerCase().includes(q)
+      );
+    }
+
     const activeFilterKeys = Object.keys(filters).filter(k => filters[k as keyof FilterConfig]);
     
     if (activeFilterKeys.length === 0) {
-      return stocks;
+      return list;
     }
 
-    return stocks.filter(stock => {
+    return list.filter(stock => {
       // Only real (live) data can be a genuine screener match; exclude
       // not-yet-warmed synthetic placeholders so they never pollute results.
       if (!stock.isLive) return false;
@@ -214,7 +292,7 @@ export default function App() {
         return true;
       });
     });
-  }, [stocks, filters]);
+  }, [stocks, filters, listSearchQuery]);
 
   // Per-filter live match counts, so each toggle shows how many real (live)
   // stocks currently satisfy it on its own. Makes it obvious a rare filter
@@ -301,32 +379,76 @@ export default function App() {
             </div>
           </div>
 
-          {/* Dynamic Asset Adder Form */}
-          <form onSubmit={handleAddTicker} className="flex gap-2 w-full md:w-auto relative">
-            <div className="relative flex-1 md:w-56">
-              <Search className="absolute left-3 top-2.5 text-slate-500" size={14} />
-              <input
-                type="text"
-                placeholder="Enter any NSE/BSE Stock (e.g., SUZLON, MRF, IRFC)..."
-                value={searchTicker}
-                onChange={(e) => setSearchTicker(e.target.value)}
-                disabled={addingStock}
-                className="w-full pl-9 pr-4 py-2 bg-[#0c101b] border border-slate-800 hover:border-slate-700 focus:border-emerald-500/50 rounded-xl text-xs text-slate-100 placeholder-slate-500 outline-none transition-all font-mono"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={addingStock || !searchTicker}
-              className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-slate-100 rounded-xl text-xs font-semibold flex items-center gap-1 transition-all shadow-lg shadow-emerald-500/5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {addingStock ? (
-                <RotateCw size={13} className="animate-spin" />
-              ) : (
-                <Plus size={13} />
-              )}
-              Add
-            </button>
-          </form>
+          {/* Live Market Search & Dynamic Asset Adder */}
+          <div className="relative w-full md:w-auto">
+            <form onSubmit={handleAddTicker} className="flex gap-2 w-full md:w-auto relative">
+              <div className="relative flex-1 md:w-64">
+                <Search className="absolute left-3 top-2.5 text-slate-500" size={14} />
+                <input
+                  type="text"
+                  placeholder="Search 2,800+ stocks (e.g. Zomato, Tata)..."
+                  value={searchTicker}
+                  onChange={(e) => setSearchTicker(e.target.value)}
+                  onFocus={() => { if (searchResults.length > 0) setShowSearchDropdown(true); }}
+                  disabled={addingStock}
+                  className="w-full pl-9 pr-8 py-2 bg-[#0c101b] border border-slate-800 hover:border-slate-700 focus:border-emerald-500/50 rounded-xl text-xs text-slate-100 placeholder-slate-500 outline-none transition-all font-mono"
+                />
+                {searchingMarket && (
+                  <RotateCw className="absolute right-3 top-2.5 text-emerald-400 animate-spin" size={13} />
+                )}
+              </div>
+              <button
+                type="submit"
+                disabled={addingStock || !searchTicker}
+                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-slate-100 rounded-xl text-xs font-semibold flex items-center gap-1 transition-all shadow-lg shadow-emerald-500/5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {addingStock ? (
+                  <RotateCw size={13} className="animate-spin" />
+                ) : (
+                  <Plus size={13} />
+                )}
+                Add
+              </button>
+            </form>
+
+            {/* Live Autocomplete Results Dropdown */}
+            {showSearchDropdown && searchResults.length > 0 && (
+              <div className="absolute left-0 right-0 mt-1.5 bg-[#0e1424] border border-slate-700/80 rounded-xl shadow-2xl z-50 max-h-72 overflow-y-auto divide-y divide-slate-800/60 font-sans">
+                <div className="px-3 py-1.5 bg-slate-900/80 text-[10px] font-mono font-bold text-slate-400 flex justify-between items-center sticky top-0 backdrop-blur-md">
+                  <span>MARKET SEARCH ({searchResults.length} FOUND)</span>
+                  <button onClick={() => setShowSearchDropdown(false)} className="hover:text-slate-200">[ESC]</button>
+                </div>
+                {searchResults.map((item) => (
+                  <div
+                    key={`${item.exchange}-${item.symbol}`}
+                    onClick={() => handleSelectSearchResult(item.symbol, item.exchange)}
+                    className="px-3 py-2.5 hover:bg-emerald-500/10 cursor-pointer transition-colors flex items-center justify-between group"
+                  >
+                    <div className="flex-1 min-w-0 pr-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-bold text-slate-100 group-hover:text-emerald-400 transition-colors">
+                          {item.symbol}
+                        </span>
+                        <span className={`px-1.5 py-0.2 text-[9px] font-mono font-bold rounded ${
+                          item.exchange === 'NSE' 
+                            ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30' 
+                            : 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
+                        }`}>
+                          {item.exchange}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-400 truncate block mt-0.5">
+                        {item.name}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                      SELECT &rarr;
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
         </div>
       </header>
@@ -411,7 +533,7 @@ export default function App() {
 
           {/* Tracked Equities List */}
           <div className="bg-[#111827]/60 border border-slate-800/80 rounded-2xl p-4.5 backdrop-blur-md flex-1 flex flex-col min-h-[300px]">
-            <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-800/60">
+            <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-800/60">
               <h2 className="text-xs font-bold text-slate-200 flex items-center gap-1.5 uppercase tracking-wider">
                 <Activity size={13} className="text-emerald-400" />
                 Tracked Assets ({filteredStocks.length})
@@ -421,6 +543,26 @@ export default function App() {
                   <RotateCw size={10} className="animate-spin" />
                   SYNCING...
                 </span>
+              )}
+            </div>
+
+            {/* Quick in-list filter input */}
+            <div className="relative mb-3">
+              <Search className="absolute left-2.5 top-2 text-slate-500" size={12} />
+              <input
+                type="text"
+                placeholder="Filter 2,800+ assets..."
+                value={listSearchQuery}
+                onChange={(e) => setListSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-6 py-1.5 bg-[#0c101b] border border-slate-800 hover:border-slate-700 focus:border-emerald-500/50 rounded-lg text-[11px] text-slate-100 placeholder-slate-500 outline-none transition-all font-mono"
+              />
+              {listSearchQuery && (
+                <button
+                  onClick={() => setListSearchQuery("")}
+                  className="absolute right-2.5 top-1.5 text-[10px] text-slate-500 hover:text-slate-300 font-mono"
+                >
+                  ×
+                </button>
               )}
             </div>
 

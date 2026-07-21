@@ -662,6 +662,32 @@ app.get("/api/stocks", async (req, res) => {
   }
 });
 
+// Search endpoint — fast text search across all 2,800+ market companies
+app.get("/api/stocks/search", (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  if (!q) {
+    res.json({ results: [] });
+    return;
+  }
+  const query = q.toLowerCase();
+  
+  // Rank matches: exact symbol match first, prefix symbol match, then name matches
+  const matches = INDIAN_STOCKS.filter(s => 
+    s.symbol.toLowerCase().includes(query) ||
+    s.name.toLowerCase().includes(query)
+  ).sort((a, b) => {
+    const aSym = a.symbol.toLowerCase();
+    const bSym = b.symbol.toLowerCase();
+    if (aSym === query) return -1;
+    if (bSym === query) return 1;
+    if (aSym.startsWith(query) && !bSym.startsWith(query)) return -1;
+    if (!aSym.startsWith(query) && bSym.startsWith(query)) return 1;
+    return a.symbol.localeCompare(b.symbol);
+  }).slice(0, 25);
+
+  res.json({ results: matches, query: q });
+});
+
 // Short-lived cache for the full detail payload so re-selecting a stock is instant.
 const detailCache = new Map<string, { data: StockDetails; ts: number }>();
 const DETAIL_TTL_MS = 3 * 60 * 1000;
