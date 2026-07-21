@@ -28,11 +28,9 @@ const FILTER_DEFS: { key: keyof FilterConfig; title: string; desc: string }[] = 
   { key: "closeAbove20wEma", title: "Close > 20W EMA", desc: "Short-term trend support" },
   { key: "closeAbove50wEma", title: "Close > 50W EMA", desc: "Medium-term trend anchor" },
   { key: "closeAbove200wEma", title: "Close > 200W EMA", desc: "Major long-term safety support" },
-  { key: "rsiBetween53And70", title: "Weekly RSI 53 - 70", desc: "Bullish momentum zone (53 - 70)" },
-  { key: "volumeAbove1_5Sma20", title: "Weekly Vol > 1.5x SMA20", desc: "Strong weekly volume expansion" },
+  { key: "rsiBetween55And70", title: "Weekly RSI 55 - 70", desc: "Bullish momentum zone (55 - 70)" },
   { key: "volumeAbove2Sma20", title: "Weekly Vol > 2.0x SMA20", desc: "Heavy weekly volume breakout" },
   { key: "dailyVolAbove1_5Sma20", title: "Daily Vol > 1.5x SMA20", desc: "Daily volume surge (>1.5x average)" },
-  { key: "dailyVolAbove2Sma20", title: "Daily Vol > 2.0x SMA20", desc: "Major daily volume breakout (>2x)" },
   { key: "closeAbove8wHigh", title: "Close > Prev 8W High", desc: "8-week breakout confirmation" },
 ];
 
@@ -56,13 +54,9 @@ export default function App() {
     closeAbove20wEma: false,
     closeAbove50wEma: false,
     closeAbove200wEma: false,
-    rsiBetween53And70: false,
-    volumeAbove1_8Sma20: false,
-    volumeAbove1_2Sma20: false,
-    volumeAbove1_5Sma20: false,
+    rsiBetween55And70: false,
     volumeAbove2Sma20: false,
     dailyVolAbove1_5Sma20: false,
-    dailyVolAbove2Sma20: false,
     closeAbove8wHigh: false,
   });
 
@@ -261,13 +255,9 @@ export default function App() {
       closeAbove20wEma: false,
       closeAbove50wEma: false,
       closeAbove200wEma: false,
-      rsiBetween53And70: false,
-      volumeAbove1_8Sma20: false,
-      volumeAbove1_2Sma20: false,
-      volumeAbove1_5Sma20: false,
+      rsiBetween55And70: false,
       volumeAbove2Sma20: false,
       dailyVolAbove1_5Sma20: false,
-      dailyVolAbove2Sma20: false,
       closeAbove8wHigh: false,
     });
   };
@@ -299,13 +289,9 @@ export default function App() {
         if (filterKey === "closeAbove20wEma") return stock.filtersMatched.closeAbove20wEma;
         if (filterKey === "closeAbove50wEma") return stock.filtersMatched.closeAbove50wEma;
         if (filterKey === "closeAbove200wEma") return stock.filtersMatched.closeAbove200wEma;
-        if (filterKey === "rsiBetween53And70") return stock.filtersMatched.rsiBetween53And70;
-        if (filterKey === "volumeAbove1_8Sma20") return stock.filtersMatched.volumeAbove1_8Sma20;
-        if (filterKey === "volumeAbove1_2Sma20") return stock.filtersMatched.volumeAbove1_2Sma20;
-        if (filterKey === "volumeAbove1_5Sma20") return stock.filtersMatched.volumeAbove1_5Sma20;
+        if (filterKey === "rsiBetween55And70") return stock.filtersMatched.rsiBetween55And70;
         if (filterKey === "volumeAbove2Sma20") return stock.filtersMatched.volumeAbove2Sma20;
         if (filterKey === "dailyVolAbove1_5Sma20") return stock.filtersMatched.dailyVolAbove1_5Sma20;
-        if (filterKey === "dailyVolAbove2Sma20") return stock.filtersMatched.dailyVolAbove2Sma20;
         if (filterKey === "closeAbove8wHigh") return stock.filtersMatched.closeAbove8wHigh;
         return true;
       });

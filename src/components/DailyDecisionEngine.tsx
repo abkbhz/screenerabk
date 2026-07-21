@@ -149,7 +149,7 @@ function DecisionCard({ d, onSelect }: { d: DailyDecision; onSelect?: (t: string
       {open && (
         <div className="flex flex-wrap gap-1 mt-1.5">
           <CheckPill ok={d.checks.closeAbove20Ema} label="Close > 20 EMA" />
-          <CheckPill ok={d.checks.rsiInZone} label="RSI 50–65" />
+          <CheckPill ok={d.checks.rsiInZone} label="RSI 55–70" />
           <CheckPill ok={d.checks.volumeSpike} label="Vol > 1.5×" />
           <CheckPill ok={d.checks.notOverextended} label={`Ext ${d.metrics.extensionPct}%`} />
           <CheckPill
@@ -212,7 +212,7 @@ export default function DailyDecisionEngine({ weeklyMatches, hasActiveFilters, o
       </div>
 
       <p className="text-[10px] text-slate-500 leading-relaxed mb-3">
-        Runs daily-timeframe checks (20 EMA, RSI 50–65, 1.5× volume, extension, resistance upside) on the{" "}
+        Runs daily-timeframe checks (20 EMA, RSI 55–70, 1.5× volume, extension, resistance upside) on the{" "}
         <span className="text-slate-300 font-semibold">{weeklyMatches.length}</span> stock(s) that passed your weekly
         scan, then classifies each as BUY / WAIT / AVOID. The weekly filters are untouched.
       </p>

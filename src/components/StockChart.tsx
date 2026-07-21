@@ -234,7 +234,7 @@ export default function StockChart({ ticker, initialHistory }: StockChartProps) 
               <XAxis dataKey="date" stroke="#4b5563" fontSize={10} minTickGap={40} interval="preserveStartEnd" />
               <YAxis stroke="#4b5563" fontSize={10} domain={[20, 80]} />
               <Tooltip content={<CustomTooltip />} />
-              <ReferenceArea {...({ y1: 55, y2: 63, fill: "#10b981", fillOpacity: 0.08 } as any)} />
+              <ReferenceArea {...({ y1: 55, y2: 70, fill: "#10b981", fillOpacity: 0.08 } as any)} />
               <ReferenceLine y={70} stroke="#f43f5e" strokeDasharray="3 3" label={{ value: 'Overbought (70)', fill: '#f43f5e', position: 'top', fontSize: 8 }} />
               <ReferenceLine y={30} stroke="#3b82f6" strokeDasharray="3 3" label={{ value: 'Oversold (30)', fill: '#3b82f6', position: 'bottom', fontSize: 8 }} />
               <Line name="RSI (14)" type="monotone" dataKey="rsi" stroke="#10b981" strokeWidth={2} dot={false} />
@@ -276,7 +276,7 @@ export default function StockChart({ ticker, initialHistory }: StockChartProps) 
         )}
         {activeTab === "rsi" && (
           <>
-            <span className="flex items-center gap-1 text-emerald-400"><span className="w-2.5 h-2 bg-[#10b981]/25" /> Momentum zone (55-63)</span>
+            <span className="flex items-center gap-1 text-emerald-400"><span className="w-2.5 h-2 bg-[#10b981]/25" /> Momentum zone (55-70)</span>
             <span className="flex items-center gap-1 text-slate-400"><span className="w-2.5 h-0.5 bg-[#10b981]" /> RSI Line</span>
           </>
         )}
