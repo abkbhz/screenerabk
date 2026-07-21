@@ -28,7 +28,7 @@ const FILTER_DEFS: { key: keyof FilterConfig; title: string; desc: string }[] = 
   { key: "closeAbove20wEma", title: "Close > 20W EMA", desc: "Short-term trend support" },
   { key: "closeAbove50wEma", title: "Close > 50W EMA", desc: "Medium-term trend anchor" },
   { key: "closeAbove200wEma", title: "Close > 200W EMA", desc: "Major long-term safety support" },
-  { key: "rsiBetween55And63", title: "Weekly RSI 55 - 63", desc: "Golden momentum zone" },
+  { key: "rsiBetween53And70", title: "Weekly RSI 53 - 70", desc: "Bullish momentum zone (53 - 70)" },
   { key: "volumeAbove1_5Sma20", title: "Weekly Vol > 1.5x SMA20", desc: "Strong weekly volume expansion" },
   { key: "volumeAbove2Sma20", title: "Weekly Vol > 2.0x SMA20", desc: "Heavy weekly volume breakout" },
   { key: "dailyVolAbove1_5Sma20", title: "Daily Vol > 1.5x SMA20", desc: "Daily volume surge (>1.5x average)" },
@@ -56,7 +56,7 @@ export default function App() {
     closeAbove20wEma: false,
     closeAbove50wEma: false,
     closeAbove200wEma: false,
-    rsiBetween55And63: false,
+    rsiBetween53And70: false,
     volumeAbove1_8Sma20: false,
     volumeAbove1_2Sma20: false,
     volumeAbove1_5Sma20: false,
@@ -261,7 +261,7 @@ export default function App() {
       closeAbove20wEma: false,
       closeAbove50wEma: false,
       closeAbove200wEma: false,
-      rsiBetween55And63: false,
+      rsiBetween53And70: false,
       volumeAbove1_8Sma20: false,
       volumeAbove1_2Sma20: false,
       volumeAbove1_5Sma20: false,
@@ -299,7 +299,7 @@ export default function App() {
         if (filterKey === "closeAbove20wEma") return stock.filtersMatched.closeAbove20wEma;
         if (filterKey === "closeAbove50wEma") return stock.filtersMatched.closeAbove50wEma;
         if (filterKey === "closeAbove200wEma") return stock.filtersMatched.closeAbove200wEma;
-        if (filterKey === "rsiBetween55And63") return stock.filtersMatched.rsiBetween55And63;
+        if (filterKey === "rsiBetween53And70") return stock.filtersMatched.rsiBetween53And70;
         if (filterKey === "volumeAbove1_8Sma20") return stock.filtersMatched.volumeAbove1_8Sma20;
         if (filterKey === "volumeAbove1_2Sma20") return stock.filtersMatched.volumeAbove1_2Sma20;
         if (filterKey === "volumeAbove1_5Sma20") return stock.filtersMatched.volumeAbove1_5Sma20;
@@ -661,7 +661,7 @@ export default function App() {
 
                       {/* Display matched filters on the item */}
                       <div className="flex flex-wrap gap-1 mt-2 border-t border-slate-800/50 pt-2 text-[8px] font-mono">
-                        {stock.filtersMatched.rsiBetween55And63 && (
+                        {stock.filtersMatched.rsiBetween53And70 && (
                           <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/10 rounded">
                             RSI Zone
                           </span>
@@ -811,8 +811,8 @@ export default function App() {
                       <MetricCard
                         label="Weekly RSI (14)"
                         value={selectedStock.indicators.rsi}
-                        subValue="55 - 63"
-                        status={selectedStock.filtersMatched.rsiBetween55And63 ? "pass" : "fail"}
+                        subValue="53 - 70"
+                        status={selectedStock.filtersMatched.rsiBetween53And70 ? "pass" : "fail"}
                         ruleDescription="The perfect momentum threshold preceding parabolic expansions."
                       />
 

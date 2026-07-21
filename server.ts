@@ -496,7 +496,7 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
   const closeAbove20wEma = currClose > currEma20;
   const closeAbove50wEma = currClose > currEma50;
   const closeAbove200wEma = currClose > currEma200;
-  const rsiBetween55And63 = currRsi >= 55 && currRsi <= 63;
+  const rsiBetween53And70 = currRsi >= 53 && currRsi <= 70;
   
   // Weekly Volume Expansion Toggles
   const volumeAbove1_2Sma20 = volRatio >= 1.2;
@@ -518,7 +518,7 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
   if (closeAbove20wEma) score += 8;
   if (closeAbove50wEma) score += 8;
   if (closeAbove200wEma) score += 9;
-  if (rsiBetween55And63) score += 15; // User's high-probability momentum filter zone
+  if (rsiBetween53And70) score += 15; // User's high-probability momentum filter zone (53 - 70)
   if (volumeAbove1_5Sma20 || volumeAbove1_8Sma20) score += 15; // Heavy institutional conviction breakout
   if (closeAbove8wHigh) score += 15; // Key horizontal breakout
   if (currRsi > 70) score -= 12; // Overbought pullback risk
@@ -532,11 +532,11 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
 
   // Entry Signal Guide
   let entryRecommendation = 'WAITING FOR CONFIRMATION';
-  if (rsiBetween55And63 && (volumeAbove1_5Sma20 || volumeAbove1_8Sma20) && closeAbove8wHigh) {
+  if (rsiBetween53And70 && (volumeAbove1_5Sma20 || volumeAbove1_8Sma20) && closeAbove8wHigh) {
     entryRecommendation = 'CRITICAL PERFECT ENTRY';
   } else if (closeAbove8wHigh && (volumeAbove1_5Sma20 || volumeAbove1_8Sma20)) {
     entryRecommendation = 'BREAKOUT ENTRY (HIGH VOLUME)';
-  } else if (rsiBetween55And63 && closeAbove20wEma) {
+  } else if (rsiBetween53And70 && closeAbove20wEma) {
     entryRecommendation = 'MOMENTUM CONVICTION ENTRY';
   } else if (currRsi < 35 && currClose > currEma200) {
     entryRecommendation = 'ACCUMULATION ZONE (MAJOR EMA SUPPORT)';
@@ -572,7 +572,7 @@ async function getStockData(ticker: string, forceSynthetic = false): Promise<Sto
       closeAbove20wEma,
       closeAbove50wEma,
       closeAbove200wEma,
-      rsiBetween55And63,
+      rsiBetween53And70,
       volumeAbove1_8Sma20,
       volumeAbove1_2Sma20,
       volumeAbove1_5Sma20,
@@ -994,12 +994,12 @@ app.get("/api/stocks/backtest", async (req, res) => {
 
 const MAX_EXTENSION_PCT = 12;   // >12% above the 20 EMA on the daily = overextended
 const MIN_UPSIDE_PCT = 5;       // need at least 5% room to the next resistance
-const RSI_ZONE_LOW = 50;
-const RSI_ZONE_HIGH = 65;
+const RSI_ZONE_LOW = 53;
+const RSI_ZONE_HIGH = 70;
 
 interface DailyChecks {
   closeAbove20Ema: boolean;
-  rsiInZone: boolean;        // 50–65
+  rsiInZone: boolean;        // 53–70
   volumeSpike: boolean;      // > 1.5× avg-20 volume
   notOverextended: boolean;  // within MAX_EXTENSION_PCT of the 20 EMA
   hasUpsideToResistance: boolean; // ≥ MIN_UPSIDE_PCT before next resistance

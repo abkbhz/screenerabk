@@ -34,7 +34,7 @@ export interface StockDetails {
     closeAbove20wEma: boolean;
     closeAbove50wEma: boolean;
     closeAbove200wEma: boolean;
-    rsiBetween55And63: boolean;
+    rsiBetween53And70: boolean;
     volumeAbove1_8Sma20: boolean;
     volumeAbove1_2Sma20: boolean;
     volumeAbove1_5Sma20: boolean;
@@ -97,7 +97,7 @@ export interface FilterConfig {
   closeAbove20wEma: boolean;
   closeAbove50wEma: boolean;
   closeAbove200wEma: boolean;
-  rsiBetween55And63: boolean;
+  rsiBetween53And70: boolean;
   volumeAbove1_8Sma20: boolean;
   volumeAbove1_2Sma20: boolean;
   volumeAbove1_5Sma20: boolean;
